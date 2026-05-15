@@ -5,16 +5,23 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
-from items import CATEGORIES, ITEMS, ShopItem, get_item, items_for_category
+from items import (
+    CATEGORIES,
+    ITEMS,
+    ShopItem,
+    armor_mitigation_percent,
+    get_item,
+    items_for_category,
+)
 from utils.helpers import fmt_amount, guild_only_message
 
 
 def _item_line(item: ShopItem) -> str:
-    stat = (
-        f"+{item.power} damage"
-        if item.category == "weapon"
-        else f"-{item.power} damage, +{item.hp_bonus} HP"
-    )
+    if item.category == "weapon":
+        crit = f", {int(item.crit_chance * 100)}% crit" if item.crit_chance > 0 else ""
+        stat = f"{item.power} base damage (+1–5 roll){crit}"
+    else:
+        stat = f"{armor_mitigation_percent(item.power)}% mitigation, +{item.hp_bonus} HP"
     return f"`{item.id}` - **{item.name}** ({fmt_amount(item.price)}): {stat}"
 
 

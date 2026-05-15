@@ -350,6 +350,11 @@ class Database:
                 PRIMARY KEY (guild_id, setting)
             );
 
+            CREATE TABLE IF NOT EXISTS guild_channels (
+                guild_id BIGINT PRIMARY KEY,
+                main_channel_id BIGINT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_guild_wallet
                 ON users(guild_id, wallet DESC);
             CREATE INDEX IF NOT EXISTS idx_bounties_guild
@@ -381,7 +386,8 @@ class Database:
               AND c.relname IN (
                   'users', 'bounties', 'hacker_pots', 'hacker_cooldowns',
                   'boss_sessions', 'boss_damage', 'boss_heals', 'inventory',
-                  'equipment', 'combat_state', 'one_time_member_jobs', 'guild_config'
+                  'equipment', 'combat_state', 'one_time_member_jobs', 'guild_config',
+                  'guild_channels'
               )
               AND a.attname IN (
                   'user_id', 'guild_id', 'placer_id', 'target_id',
@@ -660,6 +666,35 @@ class Database:
             for row in await cursor.fetchall()
             if (setting := str(row["setting"])) in config.LIVE_SETTINGS
         }
+
+    async def get_main_channel_id(self, guild_id: int) -> int | None:
+        cursor = await self.conn.execute(
+            "SELECT main_channel_id FROM guild_channels WHERE guild_id = ?",
+            (guild_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None or row["main_channel_id"] is None:
+            return None
+        return int(row["main_channel_id"])
+
+    async def set_main_channel_id(self, guild_id: int, channel_id: int | None) -> None:
+        async with self._write_lock:
+            if channel_id is None:
+                await self.conn.execute(
+                    "DELETE FROM guild_channels WHERE guild_id = ?",
+                    (guild_id,),
+                )
+            else:
+                await self.conn.execute(
+                    """
+                    INSERT INTO guild_channels (guild_id, main_channel_id)
+                    VALUES (?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        main_channel_id = excluded.main_channel_id
+                    """,
+                    (guild_id, channel_id),
+                )
+            await self.conn.commit()
 
     async def _ensure_user_no_lock(self, user_id: int, guild_id: int) -> None:
         await self.conn.execute(

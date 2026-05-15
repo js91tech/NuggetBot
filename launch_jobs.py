@@ -6,6 +6,7 @@ import discord
 from discord.ext import commands
 
 import config
+from utils.helpers import resolve_main_channel
 
 
 async def run_launch_grant(bot: commands.Bot) -> None:
@@ -44,7 +45,7 @@ async def run_launch_grant(bot: commands.Bot) -> None:
     await bot.db.mark_one_time_job_complete(config.LAUNCH_GRANT_JOB_ID)
     config.LAUNCH_GRANT_ENABLED = False
 
-    channel = _announcement_channel(guild)
+    channel = await resolve_main_channel(guild, bot.db)
     if channel is not None:
         try:
             await channel.send(
@@ -66,12 +67,3 @@ async def _human_members(guild: discord.Guild) -> list[discord.Member]:
     return [member for member in members if not member.bot]
 
 
-def _announcement_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    me = guild.me
-    channels = [guild.system_channel, *guild.text_channels]
-    for channel in channels:
-        if channel is None:
-            continue
-        if me is None or channel.permissions_for(me).send_messages:
-            return channel
-    return None

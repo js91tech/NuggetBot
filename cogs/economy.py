@@ -10,27 +10,13 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
-from utils.helpers import fmt_amount, guild_only_message, valid_amount
+from utils.helpers import fmt_amount, guild_only_message, resolve_main_channel, valid_amount
 
 COIN_DROP_INTERVAL_MINUTES = 30
 COIN_DROP_MIN_TYPERS = 3
 COIN_DROP_MIN_AMOUNT = 15
 COIN_DROP_MAX_AMOUNT = 250
 COIN_DROP_CLAIM_SECONDS = 120
-
-
-def _coin_drop_channel(guild: discord.Guild) -> discord.abc.Messageable | None:
-    bot_member = guild.me
-    if bot_member is None:
-        return None
-    if guild.system_channel is not None:
-        perms = guild.system_channel.permissions_for(bot_member)
-        if perms.send_messages:
-            return guild.system_channel
-    for channel in guild.text_channels:
-        if channel.permissions_for(bot_member).send_messages:
-            return channel
-    return None
 
 
 class CoinDropView(discord.ui.View):
@@ -137,7 +123,7 @@ class Economy(commands.Cog):
             if len(typers) < COIN_DROP_MIN_TYPERS:
                 continue
             amount = float(random.randint(COIN_DROP_MIN_AMOUNT, COIN_DROP_MAX_AMOUNT))
-            channel = _coin_drop_channel(guild)
+            channel = await resolve_main_channel(guild, self.bot.db)
             if channel is None:
                 logging.warning("Coin drop: no channel to announce in guild %s", guild.id)
                 continue

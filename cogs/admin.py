@@ -233,6 +233,12 @@ class Admin(commands.Cog):
         boss = await self.bot.db.get_active_boss(interaction.guild.id)
         virus = await self.bot.db.get_hacker_pot(interaction.guild.id)
         custom_settings = await self.bot.db.custom_config_names(interaction.guild.id)
+        main_channel_id = await self.bot.db.get_main_channel_id(interaction.guild.id)
+        main_channel = (
+            f"<#{main_channel_id}>"
+            if main_channel_id is not None
+            else "not set (using fallback)"
+        )
 
         embed = discord.Embed(
             title=f"{interaction.guild.name} Bot Status",
@@ -262,7 +268,54 @@ class Admin(commands.Cog):
             value=self._custom_settings_status(custom_settings),
             inline=False,
         )
+        embed.add_field(name="Main Channel", value=main_channel, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="set-main-channel",
+        description="Admin only: set the channel for boss spawns, defeats, and coin drops.",
+    )
+    @app_commands.describe(channel="Text channel for server-wide announcements")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_main_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+    ) -> None:
+        if interaction.guild_id is None or interaction.guild is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not channel.permissions_for(interaction.guild.me).send_messages:
+            await interaction.response.send_message(
+                "I cannot send messages in that channel.",
+                ephemeral=True,
+            )
+            return
+
+        await self.bot.db.set_main_channel_id(interaction.guild_id, channel.id)
+        await interaction.response.send_message(
+            f"Main announcement channel set to {channel.mention}. "
+            "Boss spawns, defeat rewards, and coin drops will post there.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @app_commands.command(
+        name="clear-main-channel",
+        description="Admin only: revert announcements to the system channel fallback.",
+    )
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(administrator=True)
+    async def clear_main_channel(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        await self.bot.db.set_main_channel_id(interaction.guild_id, None)
+        await interaction.response.send_message(
+            "Main channel cleared. Announcements will use the system channel or first writable channel.",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="despawn-boss", description="Admin only: despawn this server's active boss.")
     @app_commands.guild_only()

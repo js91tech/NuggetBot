@@ -99,17 +99,19 @@ python bot.py
 | `/inventory [user]` | View owned and equipped gear |
 | `/equip item_id` | Equip an owned weapon or armor piece |
 
-Weapons add boss damage and change attack text, such as slashing with a sword
-or smashing with a hammer. Armor adds HP and blocks Hannah's counterattack
-damage. The best weapon and armor each cost 120,000 nuggets, so a normal active
-player should need sustained long-term play before reaching top gear.
+Weapons define base boss damage (plus a 1–5 roll) and tier crit chance; unarmed
+attacks deal 1–15. Armor adds HP and percentage mitigation on Hannah's counters.
+The best weapon and armor each cost 120,000 nuggets.
 
 Top-end items:
 
 | Type | Item | Price | Effect |
 |------|------|-------|--------|
-| Weapon | Nugget Excalibur | 120,000 | +150 boss damage, extra crit chance |
-| Armor | Nugget Immortal Plate | 120,000 | Blocks 115 counter damage, +140 HP |
+| Weapon | Nugget Excalibur | 120,000 | 295 base damage, 16% crit |
+| Armor | Nugget Immortal Plate | 120,000 | ~67% mitigation, +345 HP |
+
+Use `/set-main-channel` so boss spawns, defeat payouts, and coin drops post in one
+place instead of random channels.
 
 ### Trivia
 
@@ -131,6 +133,8 @@ All dashboard commands require Discord administrator permission.
 | `/config setting value` | Change a setting live for this server |
 | `/config-reset setting` | Revert a setting to its default |
 | `/bot-status` | View economy totals, active games, and custom settings |
+| `/set-main-channel #channel` | Boss spawns, defeats, and coin drops post here |
+| `/clear-main-channel` | Revert announcements to system-channel fallback |
 | `/despawn-boss` | Despawn this server's active boss |
 | `/despawn-all-bosses` | Emergency clear every active boss session |
 
@@ -154,7 +158,7 @@ server and take effect without restarting the bot.
 | `hack_base_penalty` | 15.0 | Starting virus penalty |
 | `hack_penalty_increment` | 2.0 | Penalty increase per pass |
 | `hack_cooldown_seconds` | 300 | Per-user `/hack` cooldown |
-| `boss_health_scale_factor` | 0.05 | Boss HP scaling |
+| `boss_health_scale_factor` | 0.02 | Boss HP scaling (base capped at 15,000 before variant multiplier) |
 | `boss_downed_seconds` | 120 | Boss downed duration |
 | `imposter_chance` | 0.01 | Per-message sabotage chance |
 | `trivia_reward` | 25.0 | Trivia answer reward |

@@ -78,10 +78,19 @@ items as long-term goals for active players.
 
 ### Boss Gear Combat (`cogs/boss.py`)
 
-Weapons add flat boss damage and flavor verbs to `/attack`; some top-tier
-weapons add critical chance. Boss variants carry threat metadata that controls
-counterattack damage ranges and critical-hit chance. Armor blocks counterattack
-damage and adds max HP; players are only downed when their combat HP reaches 0.
+Weapons define base boss damage (plus a small 1–5 roll) and per-tier crit chance;
+unarmed attacks roll 1–15. Player crits deal 2.0× damage. Boss variants carry
+threat metadata for counterattack damage and crit chance. Armor mitigates counters
+via `damage × (1 - power/(power+100))` and adds max HP. Counter chance and
+multi-target hits (up to 3 raiders) scale up as boss HP drops. Boss HP scales from
+circulation × `boss_health_scale_factor` (default 0.02), capped at 15,000 before
+variant multipliers.
+
+### Main announcement channel
+
+`/set-main-channel` stores a per-guild text channel in `guild_channels`. Boss
+auto-spawns, defeat rewards, coin drops, and launch grant announcements use it,
+falling back to the system channel or first writable text channel.
 
 ### Web Dashboard (`dashboard.py`)
 

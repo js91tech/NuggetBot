@@ -82,3 +82,39 @@ async def send_error(interaction: discord.Interaction, message: str) -> None:
 
 def guild_only_message() -> str:
     return "This command can only be used inside a server."
+
+
+async def resolve_main_channel(
+    guild: discord.Guild,
+    db: object,
+) -> discord.abc.Messageable | None:
+    """Return the guild main announcement channel, with legacy fallbacks."""
+    get_main_channel_id = getattr(db, "get_main_channel_id", None)
+    if get_main_channel_id is not None:
+        channel_id = await get_main_channel_id(guild.id)
+        if channel_id is not None:
+            channel = guild.get_channel(channel_id)
+            if isinstance(channel, discord.TextChannel) and _can_send(guild, channel):
+                return channel
+
+    return _fallback_announcement_channel(guild)
+
+
+def _can_send(guild: discord.Guild, channel: discord.abc.GuildChannel) -> bool:
+    me = guild.me
+    if me is None:
+        return True
+    perms = channel.permissions_for(me)
+    return bool(perms.send_messages)
+
+
+def _fallback_announcement_channel(guild: discord.Guild) -> discord.abc.Messageable | None:
+    bot_member = guild.me
+    if guild.system_channel is not None and (
+        bot_member is None or _can_send(guild, guild.system_channel)
+    ):
+        return guild.system_channel
+    for channel in guild.text_channels:
+        if bot_member is None or _can_send(guild, channel):
+            return channel
+    return None
