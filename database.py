@@ -366,6 +366,54 @@ class Database:
         if self.is_postgres:
             await self._migrate_postgres_discord_snowflakes_to_bigint()
         await self._migrate_boss_passive_decay()
+        await self._migrate_guild_channel_split()
+
+    async def _migrate_guild_channel_split(self) -> None:
+        """Add designated channel + split-announcements toggle for guild_channels."""
+        if self.is_postgres:
+            for column, ddl in (
+                (
+                    "designated_channel_id",
+                    "ALTER TABLE guild_channels ADD COLUMN designated_channel_id BIGINT",
+                ),
+                (
+                    "split_announcement_channels",
+                    (
+                        "ALTER TABLE guild_channels ADD COLUMN split_announcement_channels "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    ),
+                ),
+            ):
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'guild_channels'
+                      AND column_name = ?
+                    """,
+                    (column,),
+                )
+                if await cursor.fetchone() is not None:
+                    continue
+                await self.conn.execute(ddl)
+            await self.conn.commit()
+            return
+
+        cursor = await self.conn.execute("PRAGMA table_info(guild_channels)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "designated_channel_id" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE guild_channels ADD COLUMN designated_channel_id BIGINT",
+            )
+        if "split_announcement_channels" not in cols:
+            await self.conn.execute(
+                """
+                ALTER TABLE guild_channels
+                ADD COLUMN split_announcement_channels INTEGER NOT NULL DEFAULT 0
+                """,
+            )
+        await self.conn.commit()
 
     async def _migrate_postgres_discord_snowflakes_to_bigint(self) -> None:
         """Upgrade legacy int4 columns so Discord snowflake IDs bind correctly under asyncpg.
@@ -713,23 +761,67 @@ class Database:
             if (setting := str(row["setting"])) in config.LIVE_SETTINGS
         }
 
-    async def get_main_channel_id(self, guild_id: int) -> int | None:
+    async def _get_guild_channels_row(self, guild_id: int) -> Any | None:
         cursor = await self.conn.execute(
-            "SELECT main_channel_id FROM guild_channels WHERE guild_id = ?",
+            """
+            SELECT main_channel_id, designated_channel_id, split_announcement_channels
+            FROM guild_channels
+            WHERE guild_id = ?
+            """,
             (guild_id,),
         )
-        row = await cursor.fetchone()
+        return await cursor.fetchone()
+
+    async def get_main_channel_id(self, guild_id: int) -> int | None:
+        row = await self._get_guild_channels_row(guild_id)
         if row is None or row["main_channel_id"] is None:
             return None
         return int(row["main_channel_id"])
+
+    async def get_designated_channel_id(self, guild_id: int) -> int | None:
+        row = await self._get_guild_channels_row(guild_id)
+        if row is None or row["designated_channel_id"] is None:
+            return None
+        return int(row["designated_channel_id"])
+
+    async def get_split_announcement_channels(self, guild_id: int) -> bool:
+        row = await self._get_guild_channels_row(guild_id)
+        if row is None:
+            return False
+        return bool(int(row["split_announcement_channels"]))
+
+    async def get_guild_channel_settings(self, guild_id: int) -> dict[str, int | bool | None]:
+        row = await self._get_guild_channels_row(guild_id)
+        if row is None:
+            return {
+                "main_channel_id": None,
+                "designated_channel_id": None,
+                "split_announcement_channels": False,
+            }
+        return {
+            "main_channel_id": (
+                int(row["main_channel_id"]) if row["main_channel_id"] is not None else None
+            ),
+            "designated_channel_id": (
+                int(row["designated_channel_id"])
+                if row["designated_channel_id"] is not None
+                else None
+            ),
+            "split_announcement_channels": bool(int(row["split_announcement_channels"])),
+        }
 
     async def set_main_channel_id(self, guild_id: int, channel_id: int | None) -> None:
         async with self._write_lock:
             if channel_id is None:
                 await self.conn.execute(
-                    "DELETE FROM guild_channels WHERE guild_id = ?",
+                    """
+                    UPDATE guild_channels
+                    SET main_channel_id = NULL
+                    WHERE guild_id = ?
+                    """,
                     (guild_id,),
                 )
+                await self._prune_guild_channels_row(guild_id)
             else:
                 await self.conn.execute(
                     """
@@ -741,6 +833,67 @@ class Database:
                     (guild_id, channel_id),
                 )
             await self.conn.commit()
+
+    async def set_designated_channel_id(self, guild_id: int, channel_id: int | None) -> None:
+        async with self._write_lock:
+            if channel_id is None:
+                await self.conn.execute(
+                    """
+                    UPDATE guild_channels
+                    SET designated_channel_id = NULL
+                    WHERE guild_id = ?
+                    """,
+                    (guild_id,),
+                )
+                await self._prune_guild_channels_row(guild_id)
+            else:
+                await self.conn.execute(
+                    """
+                    INSERT INTO guild_channels (guild_id, designated_channel_id)
+                    VALUES (?, ?)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        designated_channel_id = excluded.designated_channel_id
+                    """,
+                    (guild_id, channel_id),
+                )
+            await self.conn.commit()
+
+    async def set_split_announcement_channels(self, guild_id: int, enabled: bool) -> None:
+        async with self._write_lock:
+            if enabled:
+                await self.conn.execute(
+                    """
+                    INSERT INTO guild_channels (guild_id, split_announcement_channels)
+                    VALUES (?, 1)
+                    ON CONFLICT(guild_id) DO UPDATE SET
+                        split_announcement_channels = 1
+                    """,
+                    (guild_id,),
+                )
+            else:
+                await self.conn.execute(
+                    """
+                    UPDATE guild_channels
+                    SET split_announcement_channels = 0
+                    WHERE guild_id = ?
+                    """,
+                    (guild_id,),
+                )
+                await self._prune_guild_channels_row(guild_id)
+            await self.conn.commit()
+
+    async def _prune_guild_channels_row(self, guild_id: int) -> None:
+        """Remove empty guild_channels rows after partial clears."""
+        await self.conn.execute(
+            """
+            DELETE FROM guild_channels
+            WHERE guild_id = ?
+              AND main_channel_id IS NULL
+              AND designated_channel_id IS NULL
+              AND split_announcement_channels = 0
+            """,
+            (guild_id,),
+        )
 
     async def _ensure_user_no_lock(self, user_id: int, guild_id: int) -> None:
         await self.conn.execute(

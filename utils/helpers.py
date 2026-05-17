@@ -84,20 +84,57 @@ def guild_only_message() -> str:
     return "This command can only be used inside a server."
 
 
+async def _resolve_channel_by_id(
+    guild: discord.Guild,
+    channel_id: int | None,
+) -> discord.abc.Messageable | None:
+    if channel_id is None:
+        return None
+    channel = guild.get_channel(channel_id)
+    if isinstance(channel, discord.TextChannel) and _can_send(guild, channel):
+        return channel
+    return None
+
+
 async def resolve_main_channel(
     guild: discord.Guild,
     db: object,
 ) -> discord.abc.Messageable | None:
-    """Return the guild main announcement channel, with legacy fallbacks."""
+    """Return the guild main channel (coin drops / random gifts), with legacy fallbacks."""
     get_main_channel_id = getattr(db, "get_main_channel_id", None)
     if get_main_channel_id is not None:
         channel_id = await get_main_channel_id(guild.id)
-        if channel_id is not None:
-            channel = guild.get_channel(channel_id)
-            if isinstance(channel, discord.TextChannel) and _can_send(guild, channel):
-                return channel
+        resolved = await _resolve_channel_by_id(guild, channel_id)
+        if resolved is not None:
+            return resolved
 
     return _fallback_announcement_channel(guild)
+
+
+async def resolve_designated_channel(
+    guild: discord.Guild,
+    db: object,
+) -> discord.abc.Messageable | None:
+    """Return the guild designated bot channel, with main channel and legacy fallbacks."""
+    get_designated = getattr(db, "get_designated_channel_id", None)
+    if get_designated is not None:
+        channel_id = await get_designated(guild.id)
+        resolved = await _resolve_channel_by_id(guild, channel_id)
+        if resolved is not None:
+            return resolved
+
+    return await resolve_main_channel(guild, db)
+
+
+async def resolve_bot_announcement_channel(
+    guild: discord.Guild,
+    db: object,
+) -> discord.abc.Messageable | None:
+    """Boss and bot announcements: designated when split mode is on, else main."""
+    get_split = getattr(db, "get_split_announcement_channels", None)
+    if get_split is not None and await get_split(guild.id):
+        return await resolve_designated_channel(guild, db)
+    return await resolve_main_channel(guild, db)
 
 
 def _can_send(guild: discord.Guild, channel: discord.abc.GuildChannel) -> bool:

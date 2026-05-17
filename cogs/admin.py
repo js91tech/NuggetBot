@@ -233,11 +233,24 @@ class Admin(commands.Cog):
         boss = await self.bot.db.get_active_boss(interaction.guild.id)
         virus = await self.bot.db.get_hacker_pot(interaction.guild.id)
         custom_settings = await self.bot.db.custom_config_names(interaction.guild.id)
-        main_channel_id = await self.bot.db.get_main_channel_id(interaction.guild.id)
+        channel_settings = await self.bot.db.get_guild_channel_settings(interaction.guild.id)
+        main_channel_id = channel_settings["main_channel_id"]
+        designated_channel_id = channel_settings["designated_channel_id"]
+        split_enabled = channel_settings["split_announcement_channels"]
         main_channel = (
             f"<#{main_channel_id}>"
             if main_channel_id is not None
             else "not set (using fallback)"
+        )
+        designated_channel = (
+            f"<#{designated_channel_id}>"
+            if designated_channel_id is not None
+            else "not set (falls back to main)"
+        )
+        split_status = (
+            "enabled — boss posts in designated, coin drops in main"
+            if split_enabled
+            else "disabled — boss and coin drops share main channel"
         )
 
         embed = discord.Embed(
@@ -268,12 +281,20 @@ class Admin(commands.Cog):
             value=self._custom_settings_status(custom_settings),
             inline=False,
         )
-        embed.add_field(name="Main Channel", value=main_channel, inline=False)
+        embed.add_field(
+            name="Channels",
+            value=(
+                f"**Main** (coin drops): {main_channel}\n"
+                f"**Designated** (bot posts): {designated_channel}\n"
+                f"**Split mode:** {split_status}"
+            ),
+            inline=False,
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="set-main-channel",
-        description="Admin only: set the channel for boss spawns, defeats, and coin drops.",
+        description="Admin only: set the channel for random coin drops and gifts.",
     )
     @app_commands.describe(channel="Text channel for server-wide announcements")
     @app_commands.guild_only()
@@ -295,14 +316,15 @@ class Admin(commands.Cog):
 
         await self.bot.db.set_main_channel_id(interaction.guild_id, channel.id)
         await interaction.response.send_message(
-            f"Main announcement channel set to {channel.mention}. "
-            "Boss spawns, defeat rewards, and coin drops will post there.",
+            f"Main channel set to {channel.mention}. "
+            "Random coin drops will post there. "
+            "Use `/set-designated-channel` and `/toggle-split-channels` to route boss posts elsewhere.",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @app_commands.command(
         name="clear-main-channel",
-        description="Admin only: revert announcements to the system channel fallback.",
+        description="Admin only: clear the main channel (coin drops use fallback).",
     )
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(administrator=True)
@@ -313,9 +335,88 @@ class Admin(commands.Cog):
 
         await self.bot.db.set_main_channel_id(interaction.guild_id, None)
         await interaction.response.send_message(
-            "Main channel cleared. Announcements will use the system channel or first writable channel.",
+            "Main channel cleared. Coin drops will use the system channel or first writable channel.",
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="set-designated-channel",
+        description="Admin only: set the channel for boss spawns and bot announcements.",
+    )
+    @app_commands.describe(channel="Text channel where the bot posts boss and system messages")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_designated_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+    ) -> None:
+        if interaction.guild_id is None or interaction.guild is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not channel.permissions_for(interaction.guild.me).send_messages:
+            await interaction.response.send_message(
+                "I cannot send messages in that channel.",
+                ephemeral=True,
+            )
+            return
+
+        await self.bot.db.set_designated_channel_id(interaction.guild_id, channel.id)
+        await interaction.response.send_message(
+            f"Designated bot channel set to {channel.mention}. "
+            "Enable `/toggle-split-channels` so boss posts go here while coin drops stay in main.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @app_commands.command(
+        name="clear-designated-channel",
+        description="Admin only: clear the designated bot channel.",
+    )
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(administrator=True)
+    async def clear_designated_channel(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        await self.bot.db.set_designated_channel_id(interaction.guild_id, None)
+        await interaction.response.send_message(
+            "Designated channel cleared. With split mode on, boss posts fall back to the main channel.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="toggle-split-channels",
+        description=(
+            "Admin only: when on, boss posts use designated channel; coin drops stay in main."
+        ),
+    )
+    @app_commands.describe(
+        enabled="True = split boss and coin-drop channels; False = everything uses main"
+    )
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(administrator=True)
+    async def toggle_split_channels(
+        self,
+        interaction: discord.Interaction,
+        enabled: bool,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        await self.bot.db.set_split_announcement_channels(interaction.guild_id, enabled)
+        if enabled:
+            message = (
+                "Split channel mode **enabled**. Boss spawns and defeats post in the "
+                "**designated** channel; random coin drops stay in **main**."
+            )
+        else:
+            message = (
+                "Split channel mode **disabled**. Boss posts and coin drops both use the "
+                "**main** channel (or fallback)."
+            )
+        await interaction.response.send_message(message, ephemeral=True)
 
     @app_commands.command(name="despawn-boss", description="Admin only: despawn this server's active boss.")
     @app_commands.guild_only()

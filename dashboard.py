@@ -34,6 +34,7 @@ class DashboardServer:
                 web.post("/logout", self.logout),
                 web.get("/health", self.health),
                 web.get("/api/status", self.api_status),
+                web.post("/api/guild/{guild_id}/channels", self.api_update_channels),
             ]
         )
         self._runner = web.AppRunner(app)
@@ -109,6 +110,71 @@ class DashboardServer:
             return web.json_response({"error": "unauthorized"}, status=401)
         return web.json_response({"guilds": await self._snapshots()})
 
+    async def api_update_channels(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        try:
+            guild_id = int(request.match_info["guild_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "invalid guild id"}, status=400)
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json body"}, status=400)
+
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "body must be a json object"}, status=400)
+
+        text_channel_ids = {
+            channel.id for channel in guild.text_channels if channel.permissions_for(guild.me).send_messages
+        }
+
+        if "main_channel_id" in payload:
+            raw = payload["main_channel_id"]
+            if raw is None or raw == "":
+                await self.bot.db.set_main_channel_id(guild_id, None)
+            else:
+                try:
+                    channel_id = int(raw)
+                except (TypeError, ValueError):
+                    return web.json_response({"error": "main_channel_id must be an integer"}, status=400)
+                if channel_id not in text_channel_ids:
+                    return web.json_response({"error": "main channel not writable"}, status=400)
+                await self.bot.db.set_main_channel_id(guild_id, channel_id)
+
+        if "designated_channel_id" in payload:
+            raw = payload["designated_channel_id"]
+            if raw is None or raw == "":
+                await self.bot.db.set_designated_channel_id(guild_id, None)
+            else:
+                try:
+                    channel_id = int(raw)
+                except (TypeError, ValueError):
+                    return web.json_response(
+                        {"error": "designated_channel_id must be an integer"},
+                        status=400,
+                    )
+                if channel_id not in text_channel_ids:
+                    return web.json_response({"error": "designated channel not writable"}, status=400)
+                await self.bot.db.set_designated_channel_id(guild_id, channel_id)
+
+        if "split_announcement_channels" in payload:
+            await self.bot.db.set_split_announcement_channels(
+                guild_id,
+                bool(payload["split_announcement_channels"]),
+            )
+
+        settings = await self.bot.db.get_guild_channel_settings(guild_id)
+        return web.json_response({"ok": True, "channels": self._channel_snapshot(guild, settings)})
+
     def _authorized(self, request: web.Request) -> bool:
         header = request.headers.get("X-Dashboard-Token", "")
         if self._valid_token(header):
@@ -136,6 +202,7 @@ class DashboardServer:
             virus = await self.bot.db.get_hacker_pot(guild.id)
             custom_settings = await self.bot.db.custom_config_names(guild.id)
             leaderboard = await self.bot.db.leaderboard(guild.id, limit=5)
+            channel_settings = await self.bot.db.get_guild_channel_settings(guild.id)
             snapshots.append(
                 {
                     "id": guild.id,
@@ -149,6 +216,8 @@ class DashboardServer:
                     "boss": self._boss_snapshot(boss),
                     "virus": self._virus_snapshot(virus),
                     "custom_settings": sorted(custom_settings),
+                    "channels": self._channel_snapshot(guild, channel_settings),
+                    "text_channels": self._text_channel_options(guild),
                     "leaderboard": [
                         {
                             "name": self._member_name(guild, int(row["user_id"])),
@@ -159,6 +228,39 @@ class DashboardServer:
                 }
             )
         return snapshots
+
+    @staticmethod
+    def _text_channel_options(guild: Any) -> list[dict[str, str]]:
+        options = []
+        for channel in sorted(guild.text_channels, key=lambda ch: ch.position):
+            if not channel.permissions_for(guild.me).send_messages:
+                continue
+            label = f"#{channel.name}"
+            if channel.category is not None:
+                label = f"{channel.category.name} / {label}"
+            options.append({"id": str(channel.id), "label": label})
+        return options
+
+    @staticmethod
+    def _channel_snapshot(guild: Any, settings: dict[str, int | bool | None]) -> dict[str, Any]:
+        main_id = settings.get("main_channel_id")
+        designated_id = settings.get("designated_channel_id")
+        return {
+            "main_channel_id": main_id,
+            "designated_channel_id": designated_id,
+            "split_announcement_channels": bool(settings.get("split_announcement_channels")),
+            "main_channel_label": DashboardServer._channel_label(guild, main_id),
+            "designated_channel_label": DashboardServer._channel_label(guild, designated_id),
+        }
+
+    @staticmethod
+    def _channel_label(guild: Any, channel_id: int | None) -> str:
+        if channel_id is None:
+            return "Not set (fallback)"
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            return f"#{channel_id}"
+        return f"#{channel.name}"
 
     @staticmethod
     def _boss_snapshot(boss: Any) -> dict[str, Any] | None:
@@ -246,6 +348,42 @@ class DashboardServer:
               {self._metric("Active viruses", active_viruses)}
             </section>
             <section class="guild-grid">{cards}</section>
+            <script>
+            document.querySelectorAll(".channel-form").forEach((form) => {{
+              form.addEventListener("submit", async (event) => {{
+                event.preventDefault();
+                const status = form.querySelector(".channel-status");
+                const guildId = form.dataset.guildId;
+                const main = form.elements.main_channel_id.value;
+                const designated = form.elements.designated_channel_id.value;
+                const split = form.elements.split_announcement_channels.checked;
+                status.textContent = "Saving...";
+                status.className = "channel-status";
+                try {{
+                  const response = await fetch(`/api/guild/${{guildId}}/channels`, {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{
+                      main_channel_id: main || null,
+                      designated_channel_id: designated || null,
+                      split_announcement_channels: split,
+                    }}),
+                  }});
+                  const data = await response.json();
+                  if (!response.ok) {{
+                    status.textContent = data.error || "Save failed";
+                    status.className = "channel-status error";
+                    return;
+                  }}
+                  status.textContent = "Saved.";
+                  status.className = "channel-status ok";
+                }} catch (err) {{
+                  status.textContent = "Network error";
+                  status.className = "channel-status error";
+                }}
+              }});
+            }});
+            </script>
             """,
         )
 
@@ -266,6 +404,37 @@ class DashboardServer:
         )
         custom_settings = item["custom_settings"]
         settings_text = ", ".join(html.escape(name) for name in custom_settings) if custom_settings else "None"
+        channels = item["channels"]
+        channel_options = item["text_channels"]
+        main_options = self._channel_select_options(
+            channel_options,
+            channels["main_channel_id"],
+            empty_label="Not set (fallback)",
+        )
+        designated_options = self._channel_select_options(
+            channel_options,
+            channels["designated_channel_id"],
+            empty_label="Not set (use main)",
+        )
+        split_checked = "checked" if channels["split_announcement_channels"] else ""
+        channel_form = f"""
+          <form class="channel-form" data-guild-id="{item['id']}">
+            <label>
+              <span>Main channel (coin drops)</span>
+              <select name="main_channel_id">{main_options}</select>
+            </label>
+            <label>
+              <span>Designated channel (boss / bot posts)</span>
+              <select name="designated_channel_id">{designated_options}</select>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" name="split_announcement_channels" {split_checked}>
+              <span>Split channels — boss in designated, random gifts in main</span>
+            </label>
+            <button type="submit">Save channel settings</button>
+            <p class="channel-status" aria-live="polite"></p>
+          </form>
+        """
         leaderboard = "\n".join(
             f"<li><span>{html.escape(row['name'])}</span><strong>{fmt_amount(row['wallet'])}</strong></li>"
             for row in item["leaderboard"]
@@ -288,10 +457,29 @@ class DashboardServer:
             <p><strong>Virus:</strong> {virus_text}</p>
             <p><strong>Custom config:</strong> {settings_text}</p>
           </div>
+          <h3>Channels</h3>
+          {channel_form}
           <h3>Top wallets</h3>
           <ol class="leaderboard">{leaderboard}</ol>
         </article>
         """
+
+    @staticmethod
+    def _channel_select_options(
+        options: list[dict[str, str]],
+        selected_id: int | None,
+        *,
+        empty_label: str,
+    ) -> str:
+        selected = str(selected_id) if selected_id is not None else ""
+        parts = [f'<option value="">{html.escape(empty_label)}</option>']
+        for option in options:
+            sel = ' selected' if option["id"] == selected else ""
+            parts.append(
+                f'<option value="{html.escape(option["id"])}"{sel}>'
+                f'{html.escape(option["label"])}</option>'
+            )
+        return "".join(parts)
 
     @staticmethod
     def _metric(label: str, value: object) -> str:
@@ -462,6 +650,55 @@ class DashboardServer:
               border: 1px solid var(--line);
             }}
             .error {{ color: #ff9a9a; }}
+            .channel-form {{
+              display: grid;
+              gap: 12px;
+              margin-bottom: 18px;
+              background: rgba(255,255,255,0.04);
+              border-radius: 20px;
+              padding: 16px;
+              border: 1px solid var(--line);
+            }}
+            .channel-form label {{
+              display: grid;
+              gap: 6px;
+            }}
+            .channel-form label span {{
+              color: var(--muted);
+              font-size: 0.82rem;
+            }}
+            .channel-form select {{
+              width: 100%;
+              border: 1px solid var(--line);
+              border-radius: 14px;
+              padding: 12px 14px;
+              color: var(--text);
+              background: rgba(255,255,255,0.08);
+              font: inherit;
+            }}
+            .channel-form .checkbox-row {{
+              display: flex;
+              align-items: flex-start;
+              gap: 10px;
+            }}
+            .channel-form .checkbox-row input {{
+              width: auto;
+              margin: 4px 0 0;
+            }}
+            .channel-form .checkbox-row span {{
+              color: var(--text);
+              font-size: 0.9rem;
+            }}
+            .channel-form button {{
+              margin-top: 4px;
+            }}
+            .channel-status {{
+              margin: 0;
+              font-size: 0.85rem;
+              color: var(--muted);
+            }}
+            .channel-status.ok {{ color: #9dffb8; }}
+            .channel-status.error {{ color: #ff9a9a; }}
             @media (max-width: 720px) {{
               body {{ padding: 18px; }}
               .hero {{ align-items: flex-start; flex-direction: column; }}

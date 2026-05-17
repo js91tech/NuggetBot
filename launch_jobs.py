@@ -6,7 +6,7 @@ import discord
 from discord.ext import commands
 
 import config
-from utils.helpers import resolve_main_channel
+from utils.helpers import resolve_bot_announcement_channel
 
 
 async def run_launch_grant(bot: commands.Bot) -> None:
@@ -45,7 +45,7 @@ async def run_launch_grant(bot: commands.Bot) -> None:
     await bot.db.mark_one_time_job_complete(config.LAUNCH_GRANT_JOB_ID)
     config.LAUNCH_GRANT_ENABLED = False
 
-    channel = await resolve_main_channel(guild, bot.db)
+    channel = await resolve_bot_announcement_channel(guild, bot.db)
     if channel is not None:
         try:
             await channel.send(

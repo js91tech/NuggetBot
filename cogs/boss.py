@@ -20,7 +20,7 @@ from items import (
     get_item,
 )
 from utils.discord_api import safe_channel_send, safe_interaction_send
-from utils.helpers import fmt_amount, guild_only_message, resolve_main_channel
+from utils.helpers import fmt_amount, guild_only_message, resolve_bot_announcement_channel
 
 BOSS_NAME = "Hannah"
 COUNTER_HP_BONUS = 0.30
@@ -92,7 +92,7 @@ class Boss(commands.Cog):
         hp: float,
         summoned: bool,
     ) -> None:
-        channel = await resolve_main_channel(guild, self.bot.db)
+        channel = await resolve_bot_announcement_channel(guild, self.bot.db)
         if channel is None:
             logging.warning("Boss spawn embed skipped: no channel in guild %s", guild.id)
             return
@@ -142,7 +142,7 @@ class Boss(commands.Cog):
         gear_lines: list[str],
         summary: str,
     ) -> None:
-        channel = await resolve_main_channel(guild, self.bot.db)
+        channel = await resolve_bot_announcement_channel(guild, self.bot.db)
         if channel is None:
             logging.warning("Boss defeat embed skipped: no channel in guild %s", guild.id)
             return
@@ -270,8 +270,8 @@ class Boss(commands.Cog):
         )
 
         if interaction is not None and not interaction.response.is_done():
-            channel = await resolve_main_channel(guild, self.bot.db)
-            place = channel.mention if channel is not None else "the main channel"
+            channel = await resolve_bot_announcement_channel(guild, self.bot.db)
+            place = channel.mention if channel is not None else "the bot channel"
             if killer_user_id is not None:
                 msg = (
                     f"{interaction.user.mention} landed the final blow! "
