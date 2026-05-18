@@ -16,6 +16,7 @@ from items import (
 )
 from utils.gear_sets import detect_set_bonus
 from utils.helpers import fmt_amount, guild_only_message
+from utils.quests import record_quest_event
 from utils.stats import compute_combat_stats, format_combat_stats_block, format_item_stats
 
 
@@ -154,6 +155,12 @@ class Shop(commands.Cog):
         await interaction.response.send_message(
             f"You bought **{shop_item.name}** for {fmt_amount(shop_item.price)}. Use `/equip {shop_item.id}`.",
             ephemeral=True,
+        )
+        await record_quest_event(
+            self.bot.db,
+            interaction.guild_id,
+            interaction.user.id,
+            "shop_buy",
         )
 
     @app_commands.command(

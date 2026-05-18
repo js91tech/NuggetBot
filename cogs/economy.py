@@ -12,6 +12,7 @@ from discord.ext import commands, tasks
 import config
 from utils.discord_api import safe_channel_send
 from utils.helpers import fmt_amount, guild_only_message, resolve_main_channel, valid_amount
+from utils.quests import record_quest_event
 
 COIN_DROP_INTERVAL_MINUTES = 30
 COIN_DROP_MIN_TYPERS = 3
@@ -113,6 +114,12 @@ class Economy(commands.Cog):
             message.guild.id,
             reward,
         )
+        await record_quest_event(
+            self.bot.db,
+            message.guild.id,
+            message.author.id,
+            "chat_message",
+        )
         self.active_chatters.add((message.guild.id, message.author.id))
         bucket = self.coin_drop_typers.setdefault(message.guild.id, set())
         bucket.add(message.author.id)
@@ -199,6 +206,12 @@ class Economy(commands.Cog):
             f"You claimed {fmt_amount(reward)}.",
             ephemeral=True,
         )
+        await record_quest_event(
+            self.bot.db,
+            interaction.guild_id,
+            interaction.user.id,
+            "daily_claim",
+        )
 
     @app_commands.command(name="balance", description="Check a wallet balance.")
     @app_commands.describe(user="User to check. Defaults to you.")
@@ -273,6 +286,12 @@ class Economy(commands.Cog):
         await interaction.response.send_message(
             f"{interaction.user.mention} paid {user.mention} {fmt_amount(amount)}.",
             allowed_mentions=discord.AllowedMentions.none(),
+        )
+        await record_quest_event(
+            self.bot.db,
+            interaction.guild_id,
+            interaction.user.id,
+            "wallet_pay",
         )
 
 

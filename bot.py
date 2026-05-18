@@ -24,6 +24,8 @@ COGS = (
     "cogs.progression",
     "cogs.imposter",
     "cogs.trivia",
+    "cogs.gambling",
+    "cogs.quests",
     "cogs.admin",
 )
 

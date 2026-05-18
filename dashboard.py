@@ -35,6 +35,8 @@ class DashboardServer:
                 web.get("/health", self.health),
                 web.get("/api/status", self.api_status),
                 web.post("/api/guild/{guild_id}/channels", self.api_update_channels),
+                web.get("/api/guild/{guild_id}/config", self.api_get_config),
+                web.post("/api/guild/{guild_id}/config", self.api_update_config),
             ]
         )
         self._runner = web.AppRunner(app)
@@ -175,6 +177,86 @@ class DashboardServer:
         settings = await self.bot.db.get_guild_channel_settings(guild_id)
         return web.json_response({"ok": True, "channels": self._channel_snapshot(guild, settings)})
 
+    async def api_get_config(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            guild_id = int(request.match_info["guild_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "invalid guild id"}, status=400)
+        if self.bot.get_guild(guild_id) is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+        return web.json_response(
+            {"settings": await self._economy_settings_payload(guild_id)}
+        )
+
+    async def api_update_config(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            guild_id = int(request.match_info["guild_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "invalid guild id"}, status=400)
+        if self.bot.get_guild(guild_id) is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json body"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "body must be a json object"}, status=400)
+
+        settings_payload = payload.get("settings")
+        if not isinstance(settings_payload, dict):
+            return web.json_response({"error": "settings object required"}, status=400)
+
+        updated: dict[str, float] = {}
+        for key, raw in settings_payload.items():
+            if key not in config.ECONOMY_TUNING_SETTINGS:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                return web.json_response({"error": f"invalid value for {key}"}, status=400)
+            try:
+                updated[key] = await self.bot.db.set_config_value(guild_id, key, value)
+            except ValueError as exc:
+                return web.json_response({"error": f"{key}: {exc}"}, status=400)
+
+        return web.json_response(
+            {
+                "ok": True,
+                "updated": updated,
+                "settings": await self._economy_settings_payload(guild_id),
+            }
+        )
+
+    async def _economy_settings_payload(self, guild_id: int) -> list[dict[str, Any]]:
+        values = await self.bot.db.get_config_values(guild_id)
+        custom = await self.bot.db.custom_config_names(guild_id)
+        rows: list[dict[str, Any]] = []
+        for key in config.ECONOMY_TUNING_SETTINGS:
+            spec = config.LIVE_SETTINGS[key]
+            maximum = spec.maximum
+            if maximum is None:
+                maximum = 1_000_000.0 if key == "prestige_min_wallet" else 100.0
+            rows.append(
+                {
+                    "key": key,
+                    "label": spec.description,
+                    "value": float(values[key]),
+                    "default": float(spec.default),
+                    "minimum": float(spec.minimum),
+                    "maximum": float(maximum),
+                    "is_custom": key in custom,
+                }
+            )
+        return rows
+
     def _authorized(self, request: web.Request) -> bool:
         header = request.headers.get("X-Dashboard-Token", "")
         if self._valid_token(header):
@@ -206,6 +288,8 @@ class DashboardServer:
             gear_rows = await self.bot.db.gear_distribution(guild.id, limit=6)
             event = await self.bot.db.get_active_guild_event(guild.id)
             channel_settings = await self.bot.db.get_guild_channel_settings(guild.id)
+            hall = await self.bot.db.hall_of_fame_snapshot(guild.id, limit=5)
+            economy_settings = await self._economy_settings_payload(guild.id)
             snapshots.append(
                 {
                     "id": guild.id,
@@ -251,9 +335,28 @@ class DashboardServer:
                         if event is not None
                         else None
                     ),
+                    "economy_settings": economy_settings,
+                    "hall_of_fame": self._hall_of_fame_snapshot(guild, hall),
                 }
             )
         return snapshots
+
+    def _hall_of_fame_snapshot(self, guild: Any, hall: dict[str, list]) -> dict[str, list[dict[str, Any]]]:
+        def rows_for(key: str, *, value_key: str) -> list[dict[str, Any]]:
+            return [
+                {
+                    "name": self._member_name(guild, int(row["user_id"])),
+                    "value": float(row[value_key]),
+                }
+                for row in hall.get(key, [])
+            ]
+
+        return {
+            "richest": rows_for("richest", value_key="wallet"),
+            "boss_kills": rows_for("boss_kills", value_key="score"),
+            "heals": rows_for("heals", value_key="score"),
+            "achievements": rows_for("achievements", value_key="score"),
+        }
 
     @staticmethod
     def _text_channel_options(guild: Any) -> list[dict[str, str]]:
@@ -409,6 +512,37 @@ class DashboardServer:
                 }}
               }});
             }});
+            document.querySelectorAll(".economy-form").forEach((form) => {{
+              form.addEventListener("submit", async (event) => {{
+                event.preventDefault();
+                const status = form.querySelector(".economy-status");
+                const guildId = form.dataset.guildId;
+                const settings = {{}};
+                form.querySelectorAll("[data-setting-key]").forEach((input) => {{
+                  settings[input.dataset.settingKey] = parseFloat(input.value);
+                }});
+                status.textContent = "Saving...";
+                status.className = "economy-status";
+                try {{
+                  const response = await fetch(`/api/guild/${{guildId}}/config`, {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ settings }}),
+                  }});
+                  const data = await response.json();
+                  if (!response.ok) {{
+                    status.textContent = data.error || "Save failed";
+                    status.className = "economy-status error";
+                    return;
+                  }}
+                  status.textContent = "Economy settings saved.";
+                  status.className = "economy-status ok";
+                }} catch (err) {{
+                  status.textContent = "Network error";
+                  status.className = "economy-status error";
+                }}
+              }});
+            }});
             </script>
             """,
         )
@@ -475,6 +609,19 @@ class DashboardServer:
             f"<li><span>{html.escape(row['item_id'])}</span><strong>{row['count']}</strong></li>"
             for row in gear_rows
         ) or "<li><span>No equipped gear tracked</span></li>"
+        hof = item.get("hall_of_fame", {})
+        hof_richest = self._hof_list(hof.get("richest", []), money=True)
+        hof_kills = self._hof_list(hof.get("boss_kills", []))
+        hof_heals = self._hof_list(hof.get("heals", []))
+        hof_ach = self._hof_list(hof.get("achievements", []))
+        economy_sliders = self._economy_form_sliders(item.get("economy_settings", []))
+        economy_form = f"""
+          <form class="economy-form" data-guild-id="{item['id']}">
+            {economy_sliders}
+            <button type="submit">Save economy tuning</button>
+            <p class="economy-status" aria-live="polite"></p>
+          </form>
+        """
         seasonal = item.get("seasonal_event")
         if seasonal is None:
             event_text = "None"
@@ -504,6 +651,15 @@ class DashboardServer:
           </div>
           <h3>Channels</h3>
           {channel_form}
+          <h3>Economy tuning</h3>
+          {economy_form}
+          <h3>Hall of fame</h3>
+          <div class="hof-grid">
+              <div><p class="hof-title">Richest</p><ol class="leaderboard">{hof_richest}</ol></div>
+            <div><p class="hof-title">Boss kills</p><ol class="leaderboard">{hof_kills}</ol></div>
+            <div><p class="hof-title">Heals</p><ol class="leaderboard">{hof_heals}</ol></div>
+            <div><p class="hof-title">Achievements</p><ol class="leaderboard">{hof_ach}</ol></div>
+          </div>
           <h3>Top wallets</h3>
           <ol class="leaderboard">{leaderboard}</ol>
           <h3>Active raid damage</h3>
@@ -512,6 +668,51 @@ class DashboardServer:
           <ol class="leaderboard">{gear_board}</ol>
         </article>
         """
+
+    @staticmethod
+    def _hof_list(rows: list[dict[str, Any]], *, money: bool = False) -> str:
+        if not rows:
+            return "<li><span>No data yet</span></li>"
+        parts = []
+        for row in rows:
+            value = float(row["value"])
+            text = fmt_amount(value) if money else f"{int(value):,}"
+            parts.append(
+                f"<li><span>{html.escape(row['name'])}</span><strong>{html.escape(text)}</strong></li>"
+            )
+        return "".join(parts)
+
+    @staticmethod
+    def _economy_form_sliders(settings: list[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        for row in settings:
+            key = str(row["key"])
+            label = html.escape(str(row["label"]))
+            value = float(row["value"])
+            minimum = float(row["minimum"])
+            maximum = float(row["maximum"])
+            default = float(row["default"])
+            custom = "custom" if row.get("is_custom") else "default"
+            if key.endswith("_chance") or key == "gambling_house_tax":
+                step = 0.001
+                display = f"{value:.3g}"
+            elif key == "prestige_min_wallet":
+                step = 1000
+                display = f"{int(value):,}"
+            else:
+                step = 0.01 if maximum <= 10 else 1
+                display = f"{value:g}"
+            parts.append(
+                f"""
+                <label class="slider-row">
+                  <span>{label} <em class="{custom}">({display})</em></span>
+                  <input type="range" data-setting-key="{html.escape(key)}"
+                    min="{minimum}" max="{maximum}" step="{step}" value="{value}">
+                  <span class="slider-hint">Default {default:g}</span>
+                </label>
+                """
+            )
+        return "".join(parts)
 
     @staticmethod
     def _channel_select_options(
@@ -748,6 +949,46 @@ class DashboardServer:
             }}
             .channel-status.ok {{ color: #9dffb8; }}
             .channel-status.error {{ color: #ff9a9a; }}
+            .economy-form {{
+              display: grid;
+              gap: 12px;
+              margin-bottom: 18px;
+              background: rgba(255,255,255,0.04);
+              border-radius: 20px;
+              padding: 16px;
+              border: 1px solid var(--line);
+            }}
+            .slider-row {{
+              display: grid;
+              gap: 6px;
+            }}
+            .slider-row span em.custom {{ color: var(--cyan); font-style: normal; }}
+            .slider-row span em.default {{ color: var(--muted); font-style: normal; }}
+            .slider-hint {{ color: var(--muted); font-size: 0.78rem; }}
+            .economy-form input[type="range"] {{
+              width: 100%;
+              accent-color: var(--gold);
+            }}
+            .economy-status {{
+              margin: 0;
+              font-size: 0.85rem;
+              color: var(--muted);
+            }}
+            .economy-status.ok {{ color: #9dffb8; }}
+            .economy-status.error {{ color: #ff9a9a; }}
+            .hof-grid {{
+              display: grid;
+              grid-template-columns: repeat(2, 1fr);
+              gap: 12px;
+              margin-bottom: 18px;
+            }}
+            .hof-title {{
+              color: var(--muted);
+              font-size: 0.78rem;
+              text-transform: uppercase;
+              letter-spacing: 0.1em;
+              margin: 0 0 6px;
+            }}
             @media (max-width: 720px) {{
               body {{ padding: 18px; }}
               .hero {{ align-items: flex-start; flex-direction: column; }}

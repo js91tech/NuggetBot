@@ -395,6 +395,32 @@ class Database:
         await self._migrate_boss_passive_decay()
         await self._migrate_guild_channel_split()
         await self._migrate_progression_tables()
+        await self._migrate_quest_tables()
+
+    async def _migrate_quest_tables(self) -> None:
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_quests (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                track TEXT NOT NULL,
+                quest_id TEXT NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress >= 0),
+                target INTEGER NOT NULL DEFAULT 1 CHECK (target > 0),
+                completed_at REAL,
+                assigned_at REAL NOT NULL,
+                reset_key TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (guild_id, user_id, track, quest_id)
+            )
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_quests_track
+            ON user_quests(guild_id, user_id, track)
+            """
+        )
+        await self.conn.commit()
 
     async def _migrate_guild_channel_split(self) -> None:
         """Add designated channel + split-announcements toggle for guild_channels."""
@@ -2327,3 +2353,199 @@ class Database:
             (guild_id, limit),
         )
         return [(str(row["item_id"]), int(row["equipped_count"])) for row in await cursor.fetchall()]
+
+    _PROGRESS_LEADERBOARD_COLUMNS = frozenset(
+        {"bosses_killed", "heists_won", "heals_given", "mythic_kills", "crafts_done", "prestige_level"}
+    )
+
+    async def progress_leaderboard(
+        self,
+        guild_id: int,
+        column: str,
+        *,
+        limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        if column not in self._PROGRESS_LEADERBOARD_COLUMNS:
+            msg = f"Invalid progress leaderboard column: {column}"
+            raise ValueError(msg)
+        cursor = await self.conn.execute(
+            f"""
+            SELECT user_id, {column} AS score
+            FROM user_progress
+            WHERE guild_id = ? AND {column} > 0
+            ORDER BY {column} DESC, user_id ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def achievement_count_leaderboard(
+        self,
+        guild_id: int,
+        *,
+        limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, COUNT(*) AS score
+            FROM achievements
+            WHERE guild_id = ?
+            GROUP BY user_id
+            HAVING COUNT(*) > 0
+            ORDER BY score DESC, user_id ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def hall_of_fame_snapshot(self, guild_id: int, *, limit: int = 5) -> dict[str, list[aiosqlite.Row]]:
+        return {
+            "richest": await self.leaderboard(guild_id, limit=limit),
+            "boss_kills": await self.progress_leaderboard(guild_id, "bosses_killed", limit=limit),
+            "heals": await self.progress_leaderboard(guild_id, "heals_given", limit=limit),
+            "achievements": await self.achievement_count_leaderboard(guild_id, limit=limit),
+        }
+
+    async def list_user_quests(
+        self,
+        guild_id: int,
+        user_id: int,
+        track: str,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT quest_id, progress, target, completed_at, assigned_at, reset_key
+            FROM user_quests
+            WHERE guild_id = ? AND user_id = ? AND track = ?
+            ORDER BY assigned_at ASC, quest_id ASC
+            """,
+            (guild_id, user_id, track),
+        )
+        return list(await cursor.fetchall())
+
+    async def upsert_user_quest(
+        self,
+        guild_id: int,
+        user_id: int,
+        track: str,
+        quest_id: str,
+        *,
+        target: int,
+        progress: int = 0,
+        reset_key: str = "",
+    ) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                INSERT INTO user_quests (
+                    guild_id, user_id, track, quest_id,
+                    progress, target, completed_at, assigned_at, reset_key
+                )
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                ON CONFLICT(guild_id, user_id, track, quest_id) DO UPDATE SET
+                    target = excluded.target,
+                    reset_key = excluded.reset_key,
+                    progress = CASE
+                        WHEN user_quests.reset_key != excluded.reset_key THEN 0
+                        ELSE user_quests.progress
+                    END,
+                    completed_at = CASE
+                        WHEN user_quests.reset_key != excluded.reset_key THEN NULL
+                        ELSE user_quests.completed_at
+                    END,
+                    assigned_at = CASE
+                        WHEN user_quests.reset_key != excluded.reset_key THEN excluded.assigned_at
+                        ELSE user_quests.assigned_at
+                    END
+                """,
+                (
+                    guild_id,
+                    user_id,
+                    track,
+                    quest_id,
+                    progress,
+                    target,
+                    time.time(),
+                    reset_key,
+                ),
+            )
+            await self.conn.commit()
+
+    async def clear_user_quest_track(
+        self,
+        guild_id: int,
+        user_id: int,
+        track: str,
+    ) -> None:
+        async with self._write_lock:
+            await self.conn.execute(
+                "DELETE FROM user_quests WHERE guild_id = ? AND user_id = ? AND track = ?",
+                (guild_id, user_id, track),
+            )
+            await self.conn.commit()
+
+    async def advance_quest_progress(
+        self,
+        guild_id: int,
+        user_id: int,
+        track: str,
+        quest_id: str,
+        *,
+        amount: int = 1,
+    ) -> tuple[bool, int, int]:
+        """Return (newly_completed, progress, target). No-op if quest row missing or already done."""
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                """
+                SELECT progress, target, completed_at
+                FROM user_quests
+                WHERE guild_id = ? AND user_id = ? AND track = ? AND quest_id = ?
+                """,
+                (guild_id, user_id, track, quest_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return False, 0, 0
+            if row["completed_at"] is not None:
+                return False, int(row["progress"]), int(row["target"])
+            progress = min(int(row["target"]), int(row["progress"]) + amount)
+            target = int(row["target"])
+            completed = progress >= target
+            await self.conn.execute(
+                """
+                UPDATE user_quests
+                SET progress = ?,
+                    completed_at = CASE WHEN ? THEN ? ELSE completed_at END
+                WHERE guild_id = ? AND user_id = ? AND track = ? AND quest_id = ?
+                """,
+                (
+                    progress,
+                    completed,
+                    time.time() if completed else None,
+                    guild_id,
+                    user_id,
+                    track,
+                    quest_id,
+                ),
+            )
+            await self.conn.commit()
+            return completed and row["completed_at"] is None, progress, target
+
+    async def count_completed_quests(
+        self,
+        guild_id: int,
+        user_id: int,
+        track: str,
+    ) -> int:
+        value = await self.fetch_value(
+            """
+            SELECT COUNT(*) FROM user_quests
+            WHERE guild_id = ? AND user_id = ? AND track = ? AND completed_at IS NOT NULL
+            """,
+            (guild_id, user_id, track),
+        )
+        return int(value or 0)

@@ -155,6 +155,10 @@ HEALER_RAID_REWARD = 15.0
 
 CRAFT_UPGRADE_COST_FACTOR = 0.45
 
+GAMBLING_MIN_BET = 10.0
+GAMBLING_MAX_BET = 50_000.0
+GAMBLING_HOUSE_TAX = 0.05
+
 SEASONAL_EVENT_TYPES: tuple[str, ...] = (
     "double_drops",
     "bonus_income",
@@ -221,8 +225,51 @@ LIVE_SETTINGS: dict[str, LiveSetting] = {
     "boss_downed_seconds": LiveSetting(BOSS_DOWN_SECONDS, "Boss downed duration", minimum=1, integer=True),
     "imposter_chance": LiveSetting(IMPOSTER_CHANCE, "Per-message sabotage chance", maximum=1.0),
     "trivia_reward": LiveSetting(TRIVIA_REWARD, "Trivia answer reward"),
+    "boss_inferior_drop_chance": LiveSetting(
+        BOSS_INFERIOR_DROP_CHANCE,
+        "Battle-worn boss drop chance",
+        maximum=1.0,
+    ),
+    "boss_epic_drop_chance": LiveSetting(
+        BOSS_EPIC_DROP_CHANCE,
+        "Epic boss drop chance",
+        maximum=1.0,
+    ),
+    "boss_mythic_drop_chance": LiveSetting(
+        BOSS_MYTHIC_DROP_CHANCE,
+        "Mythic boss drop chance",
+        maximum=1.0,
+    ),
+    "craft_upgrade_cost_factor": LiveSetting(
+        CRAFT_UPGRADE_COST_FACTOR,
+        "Craft upgrade cost multiplier",
+        minimum=0.01,
+        maximum=2.0,
+    ),
+    "prestige_min_wallet": LiveSetting(
+        PRESTIGE_MIN_WALLET,
+        "Minimum wallet to prestige",
+        minimum=1000.0,
+    ),
+    "gambling_house_tax": LiveSetting(
+        GAMBLING_HOUSE_TAX,
+        "Tax on gambling winnings",
+        maximum=0.5,
+    ),
 }
 
 
 def live_setting_default(name: str) -> float:
     return LIVE_SETTINGS[name].default
+
+
+ECONOMY_TUNING_SETTINGS: tuple[str, ...] = (
+    "boss_inferior_drop_chance",
+    "boss_epic_drop_chance",
+    "boss_mythic_drop_chance",
+    "craft_upgrade_cost_factor",
+    "prestige_min_wallet",
+    "gambling_house_tax",
+    "passive_chat_reward",
+    "daily_reward",
+)

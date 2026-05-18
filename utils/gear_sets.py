@@ -89,8 +89,9 @@ def craft_base_id(weak_item_id: str) -> str | None:
     return weak_item_id.removeprefix(prefix)
 
 
-def craft_upgrade_cost(base_item_id: str) -> float | None:
+def craft_upgrade_cost(base_item_id: str, *, cost_factor: float | None = None) -> float | None:
     item = get_item(base_item_id)
     if item is None or item.price <= 0:
         return None
-    return max(50.0, item.price * config.CRAFT_UPGRADE_COST_FACTOR)
+    factor = config.CRAFT_UPGRADE_COST_FACTOR if cost_factor is None else cost_factor
+    return max(50.0, item.price * factor)

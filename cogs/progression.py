@@ -11,6 +11,7 @@ from items import get_item
 from utils.achievements import ACHIEVEMENTS, evaluate_unlocks, format_unlock_message
 from utils.gear_sets import craft_base_id, craft_upgrade_cost
 from utils.helpers import fmt_amount, guild_only_message
+from utils.quests import record_quest_event
 
 EVENT_LABELS: dict[str, tuple[str, float]] = {
     "double_drops": ("Double boss drop rolls", 2.0),
@@ -104,9 +105,10 @@ class Progression(commands.Cog):
             return
 
         wallet = await self.bot.db.get_balance(interaction.user.id, interaction.guild_id)
-        if wallet < config.PRESTIGE_MIN_WALLET:
+        min_wallet = await self.bot.db.get_config_value(interaction.guild_id, "prestige_min_wallet")
+        if wallet < min_wallet:
             await interaction.response.send_message(
-                f"You need at least {fmt_amount(config.PRESTIGE_MIN_WALLET)} to prestige. "
+                f"You need at least {fmt_amount(min_wallet)} to prestige. "
                 f"You have {fmt_amount(wallet)}.",
                 ephemeral=True,
             )
@@ -192,7 +194,10 @@ class Progression(commands.Cog):
             return
 
         base_item = get_item(base_id)
-        cost = craft_upgrade_cost(base_id)
+        craft_factor = await self.bot.db.get_config_value(
+            interaction.guild_id, "craft_upgrade_cost_factor"
+        )
+        cost = craft_upgrade_cost(base_id, cost_factor=craft_factor)
         if base_item is None or cost is None:
             await interaction.response.send_message("That recipe is not valid.", ephemeral=True)
             return
@@ -223,6 +228,12 @@ class Progression(commands.Cog):
         await interaction.response.send_message(
             f"Crafted **{base_item.name}** for {fmt_amount(cost)}!",
             ephemeral=True,
+        )
+        await record_quest_event(
+            self.bot.db,
+            interaction.guild_id,
+            interaction.user.id,
+            "craft_done",
         )
         await self._notify_unlocks(interaction, interaction.user.id)
 
@@ -295,6 +306,69 @@ class Progression(commands.Cog):
             return
 
         await interaction.response.send_message("Unknown action.", ephemeral=True)
+
+    @app_commands.command(
+        name="hall-of-fame",
+        description="Server legends: richest, raid kills, heals, and achievements.",
+    )
+    @app_commands.guild_only()
+    async def hall_of_fame(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        snapshot = await self.bot.db.hall_of_fame_snapshot(interaction.guild.id, limit=10)
+
+        def format_rows(
+            rows: list,
+            *,
+            value_label: str,
+            value_key: str = "wallet",
+        ) -> str:
+            if not rows:
+                return "_No entries yet_"
+            lines = []
+            for index, row in enumerate(rows, start=1):
+                member = interaction.guild.get_member(int(row["user_id"]))
+                name = member.display_name if member is not None else f"User {row['user_id']}"
+                value = float(row[value_key])
+                if value_key == "wallet":
+                    text = fmt_amount(value)
+                else:
+                    text = f"{int(value)} {value_label}"
+                lines.append(f"**{index}.** {name} — {text}")
+            return "\n".join(lines)
+
+        embed = discord.Embed(
+            title=f"{interaction.guild.name} Hall of Fame",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(
+            name="Richest",
+            value=format_rows(snapshot["richest"], value_label="nuggets"),
+            inline=False,
+        )
+        embed.add_field(
+            name="Most boss kills",
+            value=format_rows(
+                snapshot["boss_kills"], value_label="kills", value_key="score"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Most heals",
+            value=format_rows(snapshot["heals"], value_label="heals", value_key="score"),
+            inline=False,
+        )
+        embed.add_field(
+            name="Most achievements",
+            value=format_rows(
+                snapshot["achievements"], value_label="unlocked", value_key="score"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Pinned stats · Try /coinflip or /blackjack in the casino corner")
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:

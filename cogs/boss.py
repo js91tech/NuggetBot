@@ -22,6 +22,7 @@ from items import (
     get_item,
 )
 from utils.achievements import evaluate_unlocks, format_unlock_message
+from utils.quests import record_quest_event
 from utils.discord_api import safe_channel_send, safe_interaction_send
 from utils.gear_sets import SetBonus, detect_set_bonus
 from utils.helpers import fmt_amount, guild_only_message, resolve_bot_announcement_channel
@@ -78,13 +79,15 @@ class Boss(commands.Cog):
             return []
         drop_mult = await self.bot.db.get_drop_multiplier(guild_id)
         granted: list[tuple[int, ShopItem]] = []
-        if random.random() < config.BOSS_INFERIOR_DROP_CHANCE * drop_mult:
+        inferior_chance = await self.bot.db.get_config_value(guild_id, "boss_inferior_drop_chance")
+        epic_chance = await self.bot.db.get_config_value(guild_id, "boss_epic_drop_chance")
+        if random.random() < inferior_chance * drop_mult:
             uid = Boss._weighted_random_damage_user(rows)
             if uid is not None:
                 drop = random.choice(BOSS_WEAK_ITEMS)
                 await self.bot.db.grant_item(uid, guild_id, drop.id)
                 granted.append((uid, drop))
-        if random.random() < config.BOSS_EPIC_DROP_CHANCE * drop_mult:
+        if random.random() < epic_chance * drop_mult:
             uid = Boss._weighted_random_damage_user(rows)
             if uid is not None:
                 epic = random.choice((BOSS_SLAYER_BLADE, BOSS_SLAYER_MAIL))
@@ -101,7 +104,8 @@ class Boss(commands.Cog):
         if variant not in ("celestial", "mythic") or not rows:
             return []
         drop_mult = await self.bot.db.get_drop_multiplier(guild_id)
-        if random.random() >= config.BOSS_MYTHIC_DROP_CHANCE * drop_mult:
+        mythic_chance = await self.bot.db.get_config_value(guild_id, "boss_mythic_drop_chance")
+        if random.random() >= mythic_chance * drop_mult:
             return []
         uid = Boss._weighted_random_damage_user(rows)
         if uid is None:
@@ -561,6 +565,13 @@ class Boss(commands.Cog):
             await interaction.response.send_message("No boss is active right now.", ephemeral=True)
             return
 
+        await record_quest_event(
+            self.bot.db,
+            interaction.guild_id,
+            interaction.user.id,
+            "boss_attack",
+        )
+
         if float(updated["hp"]) <= 0:
             await self._complete_boss_defeat(
                 interaction.guild,
@@ -722,6 +733,12 @@ class Boss(commands.Cog):
             interaction.user.id,
             interaction.guild_id,
             config.HEALER_RAID_REWARD,
+        )
+        await record_quest_event(
+            self.bot.db,
+            interaction.guild_id,
+            interaction.user.id,
+            "boss_heal",
         )
         embed = discord.Embed(
             title="Field medic",
