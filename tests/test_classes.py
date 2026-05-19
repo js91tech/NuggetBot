@@ -42,6 +42,8 @@ class TestClasses(unittest.TestCase):
         self.assertIsNotNone(jester)
         assert jester is not None
         self.assertEqual(jester.modifiers.duel_damage_mult, config.JESTER_STAT_MULT)
+        self.assertEqual(jester.modifiers.crit_bonus, config.JESTER_CRIT_BONUS)
+        self.assertEqual(config.JESTER_REFLECT_CHANCE, 0.10)
 
 
 if __name__ == "__main__":

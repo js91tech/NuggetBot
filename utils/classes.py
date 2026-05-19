@@ -264,14 +264,18 @@ def _build_class_map() -> dict[str, ClassDef]:
         class_id=config.JESTER_CLASS_ID,
         name="Jester",
         tier="special",
-        description="Exclusive trickster — weak stats, deadly misdirection.",
-        modifiers=_mod(
+        description=(
+            "Exclusive trickster — weak stats, 50% crit chance, "
+            "10% who me? reflect (downs attacker + 3% wallet steal)."
+        ),
+        modifiers=ClassModifiers(
             income_mult=config.JESTER_STAT_MULT,
             job_payout_mult=config.JESTER_STAT_MULT,
             duel_damage_mult=config.JESTER_STAT_MULT,
             duel_mitigation_mult=config.JESTER_STAT_MULT,
             boss_damage_mult=config.JESTER_STAT_MULT,
             max_hp_mult=config.JESTER_STAT_MULT,
+            crit_bonus=config.JESTER_CRIT_BONUS,
             heist_success_penalty=0.20,
         ),
         emoji="🃏",
