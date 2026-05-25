@@ -167,9 +167,13 @@ class Spells(commands.Cog):
 
             equipment = await self.bot.db.get_equipment(interaction.user.id, interaction.guild_id)
             loadout = parse_loadout(equipment)
-            max_hp = float(
-                max_hp_from_armor(loadout.armor, class_modifiers=get_modifiers(class_id))
+            from utils.stealth_buff import scale_max_hp
+
+            raw_max = max_hp_from_armor(
+                loadout.armor,
+                class_modifiers=get_modifiers(class_id),
             )
+            max_hp = float(scale_max_hp(raw_max, interaction.user.id))
             heal = max(1, int(max_hp * state.heal_self_fraction))
             await self.bot.db.heal_player(
                 interaction.user.id,

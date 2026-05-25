@@ -473,7 +473,13 @@ class Boss(commands.Cog):
 
         loadout = await self._loadout(user_id, guild_id)
         class_id = await self.bot.db.get_class_id(user_id, guild_id)
-        return float(max_hp_from_armor(loadout.armor, class_modifiers=get_modifiers(class_id)))
+        return float(
+            max_hp_from_armor(
+                loadout.armor,
+                class_modifiers=get_modifiers(class_id),
+                user_id=user_id,
+            )
+        )
 
     @staticmethod
     def _attack_roll(
@@ -750,8 +756,15 @@ class Boss(commands.Cog):
         if interaction.guild_id is None or interaction.guild is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if await self.bot.db.is_restricted(interaction.user.id, interaction.guild_id):
-            await interaction.response.send_message("You cannot attack right now.", ephemeral=True)
+        from utils.restrictions import restriction_detail
+
+        blocked = await restriction_detail(
+            self.bot.db,
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        if blocked is not None:
+            await interaction.response.send_message(blocked, ephemeral=True)
             return
 
         boss = await self.bot.db.get_active_boss(interaction.guild_id)
@@ -817,6 +830,7 @@ class Boss(commands.Cog):
             ctx=ctx,
             set_bonus=set_bonus,
             crit_chance_multiplier=crit_mult,
+            attacker_user_id=interaction.user.id,
         )
         if summoner_debuff:
             damage = apply_summoner_attack_debuff(damage)
@@ -976,6 +990,9 @@ class Boss(commands.Cog):
         )
         if summoner_victim:
             damage = apply_summoner_counter_damage(damage)
+        from utils.stealth_buff import scale_incoming
+
+        damage = scale_incoming(damage, victim_id)
         hp, max_hp = await self.bot.db.damage_player(victim_id, guild_id, damage, max_hp)
         armor_text = ""
         if loadout.armor is not None and mitigated > 0:

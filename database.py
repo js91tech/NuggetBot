@@ -1723,6 +1723,20 @@ class Database:
             await self.conn.commit()
             return slot
 
+    async def unequip_gear_slot(self, user_id: int, guild_id: int, slot: str) -> bool:
+        if slot not in {"weapon", "off_hand", "armor"}:
+            return False
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                DELETE FROM equipment
+                WHERE guild_id = ? AND user_id = ? AND slot = ?
+                """,
+                (guild_id, user_id, slot),
+            )
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
     async def grant_item(
         self, user_id: int, guild_id: int, item_id: str, *, equip_slot: str | None = None
     ) -> None:
@@ -2152,6 +2166,47 @@ class Database:
         now = time.time() if at is None else at
         row = await self.get_user(user_id, guild_id)
         return float(row["arrested_until"]) > now or float(row["downed_until"]) > now
+
+    async def daily_cooldown_remaining(
+        self,
+        user_id: int,
+        guild_id: int,
+        cooldown_seconds: float,
+        *,
+        at: float | None = None,
+    ) -> float | None:
+        now = time.time() if at is None else at
+        row = await self.get_user(user_id, guild_id)
+        last_daily = float(row["last_daily"])
+        if last_daily <= 0:
+            return None
+        remaining = (last_daily + cooldown_seconds) - now
+        return remaining if remaining > 0 else None
+
+    async def hack_cooldown_remaining(
+        self,
+        guild_id: int,
+        user_id: int,
+        cooldown_seconds: float,
+        *,
+        at: float | None = None,
+    ) -> float | None:
+        now = time.time() if at is None else at
+        value = await self.fetch_value(
+            """
+            SELECT last_hack
+            FROM hacker_cooldowns
+            WHERE guild_id = ? AND user_id = ?
+            """,
+            (guild_id, user_id),
+        )
+        if value is None:
+            return None
+        last_hack = float(value)
+        if last_hack <= 0:
+            return None
+        remaining = (last_hack + cooldown_seconds) - now
+        return remaining if remaining > 0 else None
 
     async def leaderboard(self, guild_id: int, limit: int = 10) -> list[aiosqlite.Row]:
         cursor = await self.conn.execute(

@@ -260,11 +260,15 @@ class Gambling(commands.Cog):
                 ephemeral=True,
             )
             return None
-        if await self.bot.db.is_restricted(interaction.user.id, interaction.guild_id):
-            await interaction.response.send_message(
-                "You cannot gamble while arrested or downed.",
-                ephemeral=True,
-            )
+        from utils.restrictions import restriction_detail
+
+        blocked = await restriction_detail(
+            self.bot.db,
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        if blocked is not None:
+            await interaction.response.send_message(blocked, ephemeral=True)
             return None
         return amount
 
@@ -317,9 +321,12 @@ class Gambling(commands.Cog):
         if opponent.bot or opponent.id == interaction.user.id:
             await interaction.response.send_message("Pick another player.", ephemeral=True)
             return
-        if await self.bot.db.is_restricted(opponent.id, interaction.guild_id):
+        from utils.restrictions import restriction_detail
+
+        blocked = await restriction_detail(self.bot.db, opponent.id, interaction.guild_id)
+        if blocked is not None:
             await interaction.response.send_message(
-                "That player cannot gamble right now.",
+                f"That player cannot gamble — {blocked}",
                 ephemeral=True,
             )
             return

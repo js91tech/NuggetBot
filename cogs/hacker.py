@@ -160,6 +160,64 @@ class Hacker(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
+    @app_commands.command(
+        name="virus",
+        description="Check the active server virus, timer, and your /hack cooldown.",
+    )
+    @app_commands.guild_only()
+    async def virus_status(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        current = time.time()
+        pot = await self.bot.db.get_hacker_pot(interaction.guild_id)
+        hack_cooldown = float(
+            await self.bot.db.get_config_value(interaction.guild_id, "hack_cooldown_seconds")
+        )
+        hack_remaining = await self.bot.db.hack_cooldown_remaining(
+            interaction.guild_id,
+            interaction.user.id,
+            hack_cooldown,
+            at=current,
+        )
+        hack_line = (
+            "Your `/hack` is **ready**."
+            if hack_remaining is None
+            else f"Your `/hack` ready in **{int(hack_remaining // 60)}m {int(hack_remaining % 60)}s**."
+        )
+
+        if pot is None or float(pot["expires_at"]) <= current:
+            await interaction.response.send_message(
+                f"No active virus in this server.\n{hack_line}",
+                ephemeral=True,
+            )
+            return
+
+        holder_id = int(pot["holder_id"])
+        holder = interaction.guild.get_member(holder_id) if interaction.guild else None
+        timer_seconds = float(
+            await self.bot.db.get_config_value(interaction.guild_id, "hack_timer_seconds")
+        )
+        seconds_left = max(0.0, float(pot["expires_at"]) - current)
+        penalty = await self._penalty(
+            interaction.guild_id,
+            int(pot["pass_count"]),
+            holder_id,
+        )
+        embed = self._virus_embed(
+            title=config.HACK_VIRUS_NAME,
+            holder=holder,
+            holder_id=holder_id,
+            seconds_left=seconds_left,
+            timer_seconds=timer_seconds,
+            penalty=penalty,
+            pass_count=int(pot["pass_count"]),
+            color=discord.Color.dark_red(),
+        )
+        embed.description = hack_line
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @app_commands.command(name="transfer", description="Pass the virus to someone else.")
     @app_commands.describe(target="New virus holder")
     @app_commands.guild_only()

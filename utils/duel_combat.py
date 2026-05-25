@@ -83,7 +83,10 @@ def fighter_from_equipment(
         ab = bonuses_from_instance(aspect_instance)
     if ab is None:
         ab = AspectBonuses()
-    max_hp = max_hp_from_armor(loadout.armor, class_modifiers=mods) + ab.hp_bonus
+    from utils.stealth_buff import scale_max_hp
+
+    raw_max = max_hp_from_armor(loadout.armor, class_modifiers=mods) + ab.hp_bonus
+    max_hp = scale_max_hp(raw_max, user_id)
     has_aspect = ab != AspectBonuses()
     return DuelFighter(
         user_id=user_id,
@@ -157,6 +160,7 @@ def _one_strike(attacker: DuelFighter, defender: DuelFighter) -> DuelStrike:
         off_hand=attacker.off_hand,
         ctx=ctx,
         set_bonus=attacker.set_bonus,
+        attacker_user_id=attacker.user_id,
     )
     from utils.classes import get_modifiers
 
@@ -172,6 +176,7 @@ def _one_strike(attacker: DuelFighter, defender: DuelFighter) -> DuelStrike:
         defender.armor,
         set_bonus=defender.set_bonus,
         class_modifiers=get_modifiers(defender.class_id),
+        defender_user_id=defender.user_id,
     )
     if extra_mit > 0:
         reduced = max(1, int(damage * (1.0 - extra_mit)))
