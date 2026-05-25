@@ -47,6 +47,7 @@ def roll_player_damage(
     ctx: AttackContext | None = None,
     set_bonus: SetBonus | None = None,
     crit_chance_multiplier: float = 1.0,
+    attacker_user_id: int | None = None,
 ) -> tuple[int, bool, str]:
     ctx = ctx or AttackContext()
     damage_mult = _combined_damage_mult(ctx, set_bonus)
@@ -76,6 +77,10 @@ def roll_player_damage(
     critical = random.random() < crit_chance
     if critical:
         damage = int(damage * config.PLAYER_ATTACK_CRIT_MULTIPLIER)
+    if attacker_user_id is not None:
+        from utils.stealth_buff import scale_damage
+
+        damage = scale_damage(damage, attacker_user_id)
     return damage, critical, verb
 
 
@@ -86,28 +91,43 @@ def apply_armor_mitigation(
     set_bonus: SetBonus | None = None,
     class_modifiers: ClassModifiers | None = None,
     defense_retention: float = 1.0,
+    defender_user_id: int | None = None,
 ) -> tuple[int, int]:
     if armor is None:
-        return raw_damage, 0
-    armor_power = armor.power * max(0.0, defense_retention)
-    if class_modifiers is not None:
-        armor_power *= class_modifiers.duel_mitigation_mult
-    mitigated = int(raw_damage * armor_power / (armor_power + 100))
-    if set_bonus is not None:
-        mitigated += int(raw_damage * set_bonus.mitigation_bonus)
-    mitigated = min(raw_damage - 1, mitigated)
-    return max(1, raw_damage - mitigated), mitigated
+        damage = raw_damage
+        mitigated = 0
+    else:
+        armor_power = armor.power * max(0.0, defense_retention)
+        if class_modifiers is not None:
+            armor_power *= class_modifiers.duel_mitigation_mult
+        mitigated = int(raw_damage * armor_power / (armor_power + 100))
+        if set_bonus is not None:
+            mitigated += int(raw_damage * set_bonus.mitigation_bonus)
+        mitigated = min(raw_damage - 1, mitigated)
+        damage = max(1, raw_damage - mitigated)
+    if defender_user_id is not None:
+        from utils.stealth_buff import scale_incoming
+
+        scaled = scale_incoming(damage, defender_user_id)
+        mitigated += damage - scaled
+        damage = scaled
+    return damage, mitigated
 
 
 def max_hp_from_armor(
     armor: ShopItem | None,
     *,
     class_modifiers: ClassModifiers | None = None,
+    user_id: int | None = None,
 ) -> int:
     bonus = armor.hp_bonus if armor is not None else 0
     base = config.PLAYER_BASE_HP + bonus
     if class_modifiers is not None:
         base = int(base * class_modifiers.max_hp_mult)
+    if user_id is not None:
+        from utils.stealth_buff import scale_max_hp
+
+        return scale_max_hp(base, user_id)
     return base
 
 

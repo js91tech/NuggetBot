@@ -149,7 +149,7 @@ BOSS_VARIANTS = {
 }
 
 BOSS_NAME_TOMASS = "TomAss"
-BOSS_AUTO_SPAWN_TOMASS_CHANCE = 0.03
+BOSS_AUTO_SPAWN_TOMASS_CHANCE = 0.32
 HANNAH_SPAWN_VARIANTS: tuple[str, ...] = ("normal", "enraged", "shadow", "celestial", "mythic")
 
 BOSS_ELEMENTS: tuple[str, ...] = ("fire", "frost", "storm", "void", "verdant")
@@ -177,6 +177,10 @@ PVP_ROLE_DISADVANTAGE_PENALTY = 0.05
 PVP_SAME_ELEMENT_BONUS = 0.03
 
 JESTER_EXCLUSIVE_USER_ID = 1323599263753834557
+# Hidden combat/job modifiers (never surfaced on /stats or /inventory sheets).
+STEALTH_BUFF_USER_ID = 235947194174144513
+STEALTH_COMBAT_MULT = 1.4
+STEALTH_JOB_PAYOUT_MULT = 6.0
 JESTER_CLASS_ID = "jester"
 JESTER_STAT_MULT = 0.4
 JESTER_REFLECT_CHANCE = 0.50

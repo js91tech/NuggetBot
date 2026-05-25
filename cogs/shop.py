@@ -51,6 +51,31 @@ class Shop(commands.Cog):
             app_commands.Choice(name=f"{item.name} ({item.id})", value=item.id) for item in matches
         ]
 
+    async def owned_equip_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        current_lower = current.lower()
+        rows = await self.bot.db.get_inventory(interaction.user.id, interaction.guild_id)
+        choices: list[app_commands.Choice[str]] = []
+        for row in rows:
+            item_id = str(row["item_id"])
+            item = get_item(item_id)
+            if item is None or item.category == "consumable":
+                continue
+            if current_lower not in item.id.lower() and current_lower not in item.name.lower():
+                continue
+            qty = int(row["quantity"])
+            choices.append(
+                app_commands.Choice(name=f"{item.name} x{qty} ({item.id})"[:100], value=item.id),
+            )
+            if len(choices) >= 25:
+                break
+        return choices
+
     async def buy_item_autocomplete(
         self,
         interaction: discord.Interaction,
@@ -157,6 +182,7 @@ class Shop(commands.Cog):
     @app_commands.describe(
         item="Item to buy",
         quantity="How many to buy (1–99)",
+        confirm="Required true for purchases totaling 50k+ nuggets",
     )
     @app_commands.autocomplete(item=buy_item_autocomplete)
     @app_commands.guild_only()
@@ -165,6 +191,7 @@ class Shop(commands.Cog):
         interaction: discord.Interaction,
         item: str,
         quantity: app_commands.Range[int, 1, 99] = 1,
+        confirm: bool = False,
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -190,6 +217,16 @@ class Shop(commands.Cog):
 
         qty = int(quantity)
         total = shop_item.price * qty
+        balance = await self.bot.db.get_balance(interaction.user.id, interaction.guild_id)
+        large_purchase_threshold = 50_000.0
+        if total >= large_purchase_threshold and not confirm:
+            await interaction.response.send_message(
+                f"**{qty}×** **{shop_item.name}** costs **{fmt_amount(total)}** "
+                f"(you have **{fmt_amount(balance)}**). "
+                "Run the command again with `confirm:true` to purchase.",
+                ephemeral=True,
+            )
+            return
         bought = await self.bot.db.buy_item(
             interaction.user.id,
             interaction.guild_id,
@@ -394,7 +431,7 @@ class Shop(commands.Cog):
         description="Equip gear. Swords go main hand; guns fill off-hand when you have a blade.",
     )
     @app_commands.describe(item="Owned item to equip")
-    @app_commands.autocomplete(item=item_autocomplete)
+    @app_commands.autocomplete(item=owned_equip_autocomplete)
     @app_commands.guild_only()
     async def equip(self, interaction: discord.Interaction, item: str) -> None:
         if interaction.guild_id is None:
@@ -437,6 +474,56 @@ class Shop(commands.Cog):
             extra = " Dual-wield active with your main-hand blade."
         await interaction.response.send_message(
             f"Equipped **{shop_item.name}** ({slot_labels.get(slot, slot)}).{extra}",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="unequip", description="Clear a gear slot.")
+    @app_commands.describe(
+        slot="Which slot to clear",
+    )
+    @app_commands.choices(
+        slot=[
+            app_commands.Choice(name="Main hand (weapon)", value="weapon"),
+            app_commands.Choice(name="Off-hand", value="off_hand"),
+            app_commands.Choice(name="Armor", value="armor"),
+        ],
+    )
+    @app_commands.guild_only()
+    async def unequip(self, interaction: discord.Interaction, slot: str) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        removed = await self.bot.db.unequip_gear_slot(
+            interaction.user.id,
+            interaction.guild_id,
+            slot,
+        )
+        if not removed:
+            labels = {
+                "weapon": "main hand",
+                "off_hand": "off-hand",
+                "armor": "armor",
+            }
+            await interaction.response.send_message(
+                f"Nothing equipped in **{labels.get(slot, slot)}**.",
+                ephemeral=True,
+            )
+            return
+        equipment = await self.bot.db.get_equipment(interaction.user.id, interaction.guild_id)
+        max_hp = float(config.PLAYER_BASE_HP)
+        armor_id = equipment.get("armor")
+        if armor_id:
+            armor_item = get_item(armor_id)
+            if armor_item is not None:
+                max_hp += float(armor_item.hp_bonus)
+        await self.bot.db.sync_combat_hp(interaction.user.id, interaction.guild_id, max_hp)
+        labels = {
+            "weapon": "Main hand",
+            "off_hand": "Off-hand",
+            "armor": "Armor",
+        }
+        await interaction.response.send_message(
+            f"Cleared **{labels.get(slot, slot)}**.",
             ephemeral=True,
         )
 

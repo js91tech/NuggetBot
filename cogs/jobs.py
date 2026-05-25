@@ -139,7 +139,12 @@ class Jobs(commands.Cog):
                 interaction.guild_id,
             )
         ).work_income_mult
-        payout = roll_job_payout(job_def, payout_mult=job_mult * aspect_mult)
+        from utils.stealth_buff import job_payout_multiplier
+
+        payout = roll_job_payout(
+            job_def,
+            payout_mult=job_mult * aspect_mult * job_payout_multiplier(interaction.user.id),
+        )
         await self.bot.db.credit_wallet(
             interaction.user.id,
             interaction.guild_id,

@@ -202,6 +202,18 @@ class Progression(commands.Cog):
             await interaction.response.send_message("That recipe is not valid.", ephemeral=True)
             return
 
+        wallet = await self.bot.db.get_balance(interaction.user.id, interaction.guild_id)
+        preview = (
+            f"**Craft preview:** {base_item.name}\n"
+            f"Cost: **{fmt_amount(cost)}** · You have **{fmt_amount(wallet)}**"
+        )
+        if wallet < cost:
+            await interaction.response.send_message(
+                f"{preview}\nYou need **{fmt_amount(cost - wallet)}** more to craft.",
+                ephemeral=True,
+            )
+            return
+
         if not await self.bot.db.consume_inventory_item(
             interaction.user.id, interaction.guild_id, weak_id
         ):

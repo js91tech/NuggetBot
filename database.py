@@ -1723,6 +1723,20 @@ class Database:
             await self.conn.commit()
             return slot
 
+    async def unequip_gear_slot(self, user_id: int, guild_id: int, slot: str) -> bool:
+        if slot not in {"weapon", "off_hand", "armor"}:
+            return False
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                DELETE FROM equipment
+                WHERE guild_id = ? AND user_id = ? AND slot = ?
+                """,
+                (guild_id, user_id, slot),
+            )
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
     async def grant_item(
         self, user_id: int, guild_id: int, item_id: str, *, equip_slot: str | None = None
     ) -> None:
