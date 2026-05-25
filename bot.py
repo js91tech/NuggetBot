@@ -16,6 +16,7 @@ from utils.discord_api import OutboundGate, safe_interaction_send
 
 COGS = (
     "cogs.economy",
+    "cogs.status",
     "cogs.bounty",
     "cogs.heist",
     "cogs.hacker",
