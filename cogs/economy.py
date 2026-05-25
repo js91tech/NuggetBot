@@ -230,12 +230,16 @@ class Economy(commands.Cog):
         )
 
     @app_commands.command(name="balance", description="Check a wallet balance.")
-    @app_commands.describe(user="User to check. Defaults to you.")
+    @app_commands.describe(
+        user="User to check. Defaults to you.",
+        public="Show in the channel (only when checking yourself)",
+    )
     @app_commands.guild_only()
     async def balance(
         self,
         interaction: discord.Interaction,
         user: discord.Member | None = None,
+        public: bool = False,
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -243,9 +247,11 @@ class Economy(commands.Cog):
 
         target = user or interaction.user
         balance = await self.bot.db.get_balance(target.id, interaction.guild_id)
+        ephemeral = not (public and target.id == interaction.user.id)
         await interaction.response.send_message(
             f"{target.mention} has {fmt_amount(balance)}.",
             allowed_mentions=discord.AllowedMentions.none(),
+            ephemeral=ephemeral,
         )
 
     @app_commands.command(name="leaderboard", description="Show the richest users.")
@@ -266,16 +272,27 @@ class Economy(commands.Cog):
             name = member.display_name if member else f"User {row['user_id']}"
             lines.append(f"**{index}.** {name}: {fmt_amount(float(row['wallet']))}")
 
-        await interaction.response.send_message("\n".join(lines))
+        embed = discord.Embed(
+            title="Richest wallets",
+            description="\n".join(lines),
+            color=discord.Color.gold(),
+        )
+        embed.set_footer(text="Raid & social boards: /hall-of-fame")
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="pay", description="Send nuggets to another user.")
-    @app_commands.describe(user="User to pay", amount="Amount to send")
+    @app_commands.describe(
+        user="User to pay",
+        amount="Amount to send",
+        confirm="Set true to confirm payments of 25k+ nuggets",
+    )
     @app_commands.guild_only()
     async def pay(
         self,
         interaction: discord.Interaction,
         user: discord.Member,
         amount: float,
+        confirm: bool = False,
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -285,6 +302,17 @@ class Economy(commands.Cog):
             return
         if not valid_amount(amount):
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
+            return
+
+        balance = await self.bot.db.get_balance(interaction.user.id, interaction.guild_id)
+        large_pay_threshold = 25_000.0
+        if amount >= large_pay_threshold and not confirm:
+            await interaction.response.send_message(
+                f"You are about to send **{fmt_amount(amount)}** to {user.display_name} "
+                f"(you have **{fmt_amount(balance)}**). "
+                "Run again with `confirm:true` to complete the transfer.",
+                ephemeral=True,
+            )
             return
 
         paid = await self.bot.db.transfer_wallet(

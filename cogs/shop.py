@@ -532,7 +532,8 @@ class Shop(commands.Cog):
     )
     @app_commands.describe(
         item="Owned item to sell",
-        quantity="How many to sell (1–99, or all you own if less)",
+        quantity="How many to sell (1–99, ignored if sell_all is true)",
+        sell_all="Sell every copy you own",
     )
     @app_commands.autocomplete(item=sell_item_autocomplete)
     @app_commands.guild_only()
@@ -541,6 +542,7 @@ class Shop(commands.Cog):
         interaction: discord.Interaction,
         item: str,
         quantity: app_commands.Range[int, 1, 99] = 1,
+        sell_all: bool = False,
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -568,7 +570,7 @@ class Shop(commands.Cog):
             )
             return
 
-        qty = int(quantity)
+        qty = owned_qty if sell_all else int(quantity)
         sold = await self.bot.db.sell_one_item(
             interaction.user.id,
             interaction.guild_id,

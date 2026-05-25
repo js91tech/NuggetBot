@@ -64,10 +64,15 @@ class Heist(commands.Cog):
             )
             return
 
+        from utils.restrictions import restriction_detail
+
         for member in participants:
-            if await self.bot.db.is_restricted(member.id, interaction.guild_id, current):
+            blocked = await restriction_detail(
+                self.bot.db, member.id, interaction.guild_id, at=current
+            )
+            if blocked is not None:
                 await interaction.response.send_message(
-                    f"{member.display_name} cannot join a heist right now.",
+                    f"{member.display_name} cannot heist — {blocked}",
                     ephemeral=True,
                 )
                 return

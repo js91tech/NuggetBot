@@ -11,11 +11,11 @@ class Help(commands.Cog):
     SECTIONS: tuple[tuple[str, str], ...] = (
         (
             "Economy",
-            "`/daily` `/balance` `/pay` `/leaderboard` `/status`",
+            "`/daily` `/balance` `/pay` `/leaderboard` `/status` · large `/pay` needs `confirm:true`",
         ),
         (
             "Shop & gear",
-            "`/shop` `/buy` `/sell` `/inventory` `/equip` `/unequip` `/stats`",
+            "`/shop` `/buy` `/sell` sell_all · `/inventory` `/equip` `/unequip` `/stats`",
         ),
         (
             "Jobs & classes",
@@ -31,11 +31,11 @@ class Help(commands.Cog):
         ),
         (
             "PvP & casino",
-            "`/duel` `/coinflip` `/coinflip-duel` `/blackjack`",
+            "`/duel` (accept/decline) `/coinflip` `/coinflip-duel` `/blackjack`",
         ),
         (
             "Progression",
-            "`/quests` `/quest-hint` `/craft` `/achievements` `/hall-of-fame` `/aspects`",
+            "`/quests` (shows next goal) `/quest-hint` `/craft` `/achievements` `/hall-of-fame` `/aspects`",
         ),
         (
             "Fun",

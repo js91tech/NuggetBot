@@ -94,17 +94,37 @@ class Jobs(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if await self.bot.db.is_restricted(interaction.user.id, interaction.guild_id):
-            await interaction.response.send_message(
-                "You cannot work while arrested or downed.",
-                ephemeral=True,
-            )
+        from utils.restrictions import restriction_detail
+
+        blocked = await restriction_detail(
+            self.bot.db,
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        if blocked is not None:
+            await interaction.response.send_message(blocked, ephemeral=True)
             return
 
         job_def = get_job(job)
         if job_def is None:
             await interaction.response.send_message("Unknown job.", ephemeral=True)
             return
+
+        from utils.classes import get_modifiers
+        from utils.stealth_buff import job_payout_multiplier
+
+        class_id = await self.bot.db.get_class_id(interaction.user.id, interaction.guild_id)
+        job_mult = get_modifiers(class_id).job_payout_mult
+        aspect_mult = (
+            await self.bot.db.get_equipped_aspect_bonuses(
+                interaction.user.id,
+                interaction.guild_id,
+            )
+        ).work_income_mult
+        payout_mult = job_mult * aspect_mult * job_payout_multiplier(interaction.user.id)
+        low = int(job_def.payout_min * config.JOB_PAYOUT_MULTIPLIER * payout_mult)
+        high = int(job_def.payout_max * config.JOB_PAYOUT_MULTIPLIER * payout_mult)
+        range_note = f"**{fmt_amount(low)}–{fmt_amount(high)}** per shift"
 
         ok, err = await self.bot.db.spend_job_energy(
             interaction.user.id,
@@ -129,22 +149,7 @@ class Jobs(commands.Cog):
             )
             return
 
-        from utils.classes import get_modifiers
-
-        class_id = await self.bot.db.get_class_id(interaction.user.id, interaction.guild_id)
-        job_mult = get_modifiers(class_id).job_payout_mult
-        aspect_mult = (
-            await self.bot.db.get_equipped_aspect_bonuses(
-                interaction.user.id,
-                interaction.guild_id,
-            )
-        ).work_income_mult
-        from utils.stealth_buff import job_payout_multiplier
-
-        payout = roll_job_payout(
-            job_def,
-            payout_mult=job_mult * aspect_mult * job_payout_multiplier(interaction.user.id),
-        )
+        payout = roll_job_payout(job_def, payout_mult=payout_mult)
         await self.bot.db.credit_wallet(
             interaction.user.id,
             interaction.guild_id,
@@ -176,6 +181,7 @@ class Jobs(commands.Cog):
             inline=True,
         )
         embed.add_field(name="Energy", value=energy_text, inline=False)
+        embed.set_footer(text=f"Typical pay band: {range_note}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(

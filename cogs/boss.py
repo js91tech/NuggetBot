@@ -756,8 +756,15 @@ class Boss(commands.Cog):
         if interaction.guild_id is None or interaction.guild is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if await self.bot.db.is_restricted(interaction.user.id, interaction.guild_id):
-            await interaction.response.send_message("You cannot attack right now.", ephemeral=True)
+        from utils.restrictions import restriction_detail
+
+        blocked = await restriction_detail(
+            self.bot.db,
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        if blocked is not None:
+            await interaction.response.send_message(blocked, ephemeral=True)
             return
 
         boss = await self.bot.db.get_active_boss(interaction.guild_id)

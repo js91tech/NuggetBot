@@ -14,6 +14,7 @@ from utils.quests import (
     format_quest_lines,
     is_veteran,
 )
+from utils.quests_display import next_quest_line
 
 
 class Quests(commands.Cog):
@@ -43,6 +44,9 @@ class Quests(commands.Cog):
                 color=discord.Color.blue(),
             )
             embed.set_footer(text="Resets at UTC midnight · Rewards pay on completion")
+            hint = next_quest_line(daily_rows, track=TRACK_DAILY)
+            if hint:
+                embed.add_field(name="Focus next", value=hint, inline=False)
         else:
             await ensure_onboarding_quests(
                 self.bot.db, interaction.guild_id, interaction.user.id
@@ -69,6 +73,10 @@ class Quests(commands.Cog):
                     value="You unlocked **daily goals** — check back tomorrow or after UTC midnight.",
                     inline=False,
                 )
+            else:
+                hint = next_quest_line(onboard_rows, track=TRACK_ONBOARDING)
+                if hint:
+                    embed.add_field(name="Focus next", value=hint, inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
