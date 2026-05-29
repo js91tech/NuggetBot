@@ -5,7 +5,15 @@ from discord import app_commands
 from discord.ext import commands
 
 from items import GIFTABLE_ITEM_IDS, get_item
+from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.helpers import guild_only_message
+
+GIFT_EMOJI: dict[str, str] = {
+    "chia_seeds": "🌱",
+    "sunflower_seeds": "🌻",
+    "honey_jar": "🍯",
+    "lucky_cookie": "🥠",
+}
 
 
 class Consumables(commands.Cog):
@@ -111,6 +119,19 @@ class Consumables(commands.Cog):
             )
             return
 
+        if item_id == "chia_seeds":
+            if not await self.bot.db.consume_inventory_item(uid, guild_id, item_id):
+                await interaction.response.send_message(
+                    "Could not consume item.", ephemeral=True,
+                )
+                return
+            new_energy = await self.bot.db.add_energy(uid, guild_id, 8)
+            await interaction.response.send_message(
+                f"**Chia Seeds** — wholesome crunch. Energy **{new_energy}**.",
+                ephemeral=True,
+            )
+            return
+
         if not await self.bot.db.consume_inventory_item(uid, guild_id, item_id):
             await interaction.response.send_message(
                 "Could not consume item.", ephemeral=True,
@@ -128,11 +149,11 @@ class Consumables(commands.Cog):
 
     @app_commands.command(
         name="gift",
-        description="Gift chia seeds (or other giftable items) from your inventory.",
+        description="Gift snacks from your inventory to another player.",
     )
     @app_commands.describe(
         user="Player to receive the gift",
-        item="Item to gift (buy Chia Seeds from /shop first)",
+        item="Giftable item (buy from /shop consumables)",
         quantity="How many to send (1–99)",
     )
     @app_commands.autocomplete(item=gift_item_autocomplete)
@@ -156,7 +177,7 @@ class Consumables(commands.Cog):
         shop_item = get_item(item_id)
         if shop_item is None or item_id not in GIFTABLE_ITEM_IDS:
             await interaction.response.send_message(
-                "That item cannot be gifted. Buy **Chia Seeds** from `/shop` consumables.",
+                "That item cannot be gifted. Buy giftable snacks from `/shop` consumables.",
                 ephemeral=True,
             )
             return
@@ -169,7 +190,7 @@ class Consumables(commands.Cog):
         if err == "insufficient_items":
             await interaction.response.send_message(
                 f"You need **{qty}×** **{shop_item.name}** in your inventory "
-                f"(buy with `/buy chia_seeds`).",
+                f"(buy with `/buy {item_id}`).",
                 ephemeral=True,
             )
             return
@@ -183,11 +204,26 @@ class Consumables(commands.Cog):
                 "Could not complete the gift.", ephemeral=True,
             )
             return
+        emoji = GIFT_EMOJI.get(item_id, "🎁")
         await interaction.response.send_message(
             f"{interaction.user.mention} gifted **{qty}×** **{shop_item.name}** "
-            f"to {user.mention}! 🌱",
+            f"to {user.mention}! {emoji}",
             allowed_mentions=discord.AllowedMentions(users=True),
         )
+        unlocked = await evaluate_unlocks(self.bot.db, guild_id, sender_id)
+        receiver_unlocked = await evaluate_unlocks(self.bot.db, guild_id, user.id)
+        unlock_lines: list[str] = []
+        sender_text = format_unlock_message(unlocked)
+        if sender_text:
+            unlock_lines.append(f"{interaction.user.mention}\n{sender_text}")
+        receiver_text = format_unlock_message(receiver_unlocked)
+        if receiver_text:
+            unlock_lines.append(f"{user.mention}\n{receiver_text}")
+        if unlock_lines:
+            await interaction.followup.send(
+                "\n\n".join(unlock_lines),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
 
 
 async def setup(bot: commands.Bot) -> None:

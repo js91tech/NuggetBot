@@ -22,7 +22,7 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Character",
         "**/class** · **/cast** · **/mana** · **/aspects** · **/avatar** (upload custom)\n"
-        "**/use** — raid potion, energy drink, duel scroll · **/gift** — chia seeds to friends",
+        "**/use** — raid potion, energy drink, duel scroll, chia seeds · **/gift** — snacks to friends",
         "**/profile** · **/stats** · **/quests** · **/achievements**",
     ),
     (
