@@ -49,6 +49,18 @@ ACHIEVEMENTS: dict[str, Achievement] = {
         "Your crew holds 3 zones at once.",
         "👑",
     ),
+    "generous": Achievement(
+        "generous",
+        "Generous",
+        "Gift 25 items to other players.",
+        "🎁",
+    ),
+    "beloved": Achievement(
+        "beloved",
+        "Beloved",
+        "Receive 25 gifts.",
+        "💝",
+    ),
 }
 
 
@@ -134,6 +146,19 @@ async def evaluate_unlocks(
         await grant("territory_claimed")
     if sieges_won >= 5:
         await grant("siege_victor")
+
+    try:
+        gifts_sent = int(progress["gifts_sent"])
+    except (KeyError, TypeError):
+        gifts_sent = 0
+    try:
+        gifts_received = int(progress["gifts_received"])
+    except (KeyError, TypeError):
+        gifts_received = 0
+    if gifts_sent >= 25:
+        await grant("generous")
+    if gifts_received >= 25:
+        await grant("beloved")
 
     crew_name = await db.get_crew_membership(user_id, guild_id)
     if crew_name is not None:

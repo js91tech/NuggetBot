@@ -451,6 +451,36 @@ class Database:
         await self._migrate_crew_banking()
         await self._migrate_territories()
         await self._migrate_territory_integration()
+        await self._migrate_gift_stats()
+
+    async def _migrate_gift_stats(self) -> None:
+        progress_cols = [
+            ("gifts_sent", "INTEGER NOT NULL DEFAULT 0"),
+            ("gifts_received", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        if self.is_postgres:
+            for col, typedef in progress_cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'user_progress' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_progress ADD COLUMN {col} {typedef}",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(user_progress)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in progress_cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_progress ADD COLUMN {col} {typedef}",
+                    )
+        await self.conn.commit()
 
     async def _migrate_territory_integration(self) -> None:
         territory_cols = [
@@ -3715,6 +3745,8 @@ class Database:
         dungeons_cleared: int = 0,
         territories_claimed: int = 0,
         sieges_won: int = 0,
+        gifts_sent: int = 0,
+        gifts_received: int = 0,
     ) -> None:
         if not any(
             (
@@ -3728,6 +3760,8 @@ class Database:
                 dungeons_cleared,
                 territories_claimed,
                 sieges_won,
+                gifts_sent,
+                gifts_received,
             )
         ):
             return
@@ -3745,7 +3779,9 @@ class Database:
                     gambles_won = gambles_won + ?,
                     dungeons_cleared = dungeons_cleared + ?,
                     territories_claimed = territories_claimed + ?,
-                    sieges_won = sieges_won + ?
+                    sieges_won = sieges_won + ?,
+                    gifts_sent = gifts_sent + ?,
+                    gifts_received = gifts_received + ?
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (
@@ -3759,6 +3795,8 @@ class Database:
                     dungeons_cleared,
                     territories_claimed,
                     sieges_won,
+                    gifts_sent,
+                    gifts_received,
                     user_id,
                     guild_id,
                 ),
@@ -3903,6 +3941,22 @@ class Database:
                     quantity = inventory.quantity + excluded.quantity
                 """,
                 (guild_id, receiver_id, item_id, qty),
+            )
+            await self._ensure_progress_no_lock(sender_id, guild_id)
+            await self._ensure_progress_no_lock(receiver_id, guild_id)
+            await self.conn.execute(
+                """
+                UPDATE user_progress SET gifts_sent = gifts_sent + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (qty, sender_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE user_progress SET gifts_received = gifts_received + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (qty, receiver_id, guild_id),
             )
             await self.conn.commit()
         return None

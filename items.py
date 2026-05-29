@@ -362,7 +362,34 @@ CHIA_SEEDS = ShopItem(
     "consumable",
     50,
     0,
-    "Wholesome snack seeds. Buy from /shop, then gift with /gift.",
+    "Wholesome snack seeds. /use for +8 job energy, or /gift to a friend.",
+    shop_listed=True,
+)
+SUNFLOWER_SEEDS = ShopItem(
+    "sunflower_seeds",
+    "Sunflower Seeds",
+    "consumable",
+    35,
+    0,
+    "Crunchy snack. Buy from /shop, then gift with /gift.",
+    shop_listed=True,
+)
+HONEY_JAR = ShopItem(
+    "honey_jar",
+    "Honey Jar",
+    "consumable",
+    40,
+    0,
+    "Sweet treat from the Market. Gift with /gift.",
+    shop_listed=True,
+)
+LUCKY_COOKIE = ShopItem(
+    "lucky_cookie",
+    "Lucky Cookie",
+    "consumable",
+    30,
+    0,
+    "Fortune inside (probably). Buy from /shop, then /gift.",
     shop_listed=True,
 )
 
@@ -382,13 +409,28 @@ CONSUMABLES: tuple[ShopItem, ...] = (
     ENERGY_DRINK,
     DUEL_SCROLL,
     CHIA_SEEDS,
+    SUNFLOWER_SEEDS,
+    HONEY_JAR,
+    LUCKY_COOKIE,
     ALCHEMY_SCRAP,
 )
 
-GIFTABLE_ITEM_IDS: frozenset[str] = frozenset({"chia_seeds"})
+GIFTABLE_ITEM_IDS: frozenset[str] = frozenset({
+    "chia_seeds",
+    "sunflower_seeds",
+    "honey_jar",
+    "lucky_cookie",
+})
+
+GIFT_ONLY_ITEM_IDS: frozenset[str] = frozenset({
+    "sunflower_seeds",
+    "honey_jar",
+    "lucky_cookie",
+})
 
 CONSUMABLE_USE_IDS: frozenset[str] = frozenset(
-    item.id for item in CONSUMABLES if item.id != "trap_bomb"
+    item.id for item in CONSUMABLES
+    if item.id != "trap_bomb" and item.id not in GIFT_ONLY_ITEM_IDS
 )
 
 

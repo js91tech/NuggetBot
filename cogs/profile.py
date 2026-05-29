@@ -82,6 +82,19 @@ class Profile(commands.Cog):
             value=f"**{int(progress['duel_wins'])}** wins · ELO **{rating}** ({elo_wins}W/{elo_losses}L)",
             inline=False,
         )
+        try:
+            gifts_sent = int(progress["gifts_sent"])
+        except (KeyError, TypeError):
+            gifts_sent = 0
+        try:
+            gifts_received = int(progress["gifts_received"])
+        except (KeyError, TypeError):
+            gifts_received = 0
+        embed.add_field(
+            name="Gifts",
+            value=f"**{gifts_sent}** sent · **{gifts_received}** received",
+            inline=True,
+        )
         embed.add_field(
             name="Mana",
             value=f"`{mana_bar(snap.current, snap.cap)}` {snap.current}/{snap.cap}",
