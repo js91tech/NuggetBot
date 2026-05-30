@@ -63,7 +63,7 @@ class Profile(commands.Cog):
             remaining = float(user_row["arrested_until"]) - now
             bail = fmt_amount(bail_cost_for_tier(tier))
             cooldown_lines.append(
-                f"**Jail** {format_jail_time_remaining(remaining)} · Bail **{bail}** (`/bail`)"
+                f"**Jail** {format_jail_time_remaining(remaining)} · Bail **{bail}** (`/jail`)"
             )
         if float(user_row["downed_until"]) > now:
             cooldown_lines.append("**Downed**")

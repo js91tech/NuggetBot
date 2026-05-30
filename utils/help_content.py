@@ -27,8 +27,8 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Chaos modules",
-        "**/bounty** · **/bounty-board** · **/heist** · **/arrest** · **/bail** · **/bank-heist** · **/hack** · **/trivia**\n"
-        "**/bail** — wallet heist **15k** · bank tiers **30k / 40k / 55k** · or use **Jail Key** (75k shop)\n"
+        "**/bounty** · **/bounty-board** · **/heist** · **/arrest** · **/jail** · **/bank-heist** · **/hack** · **/trivia**\n"
+        "**/jail** panel — post bail, use Jail Key on self/allies · `/bail @user` instant ally bail\n"
         "**/hall-of-fame** · **/event** (admins)",
     ),
 )

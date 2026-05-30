@@ -16,6 +16,7 @@ from utils.gear_sets import heist_intimidation_bonus
 from utils.bot_players import pvp_target_error
 from utils.helpers import fmt_amount, guild_only_message
 from utils.jail import bail_cost_for_tier, execute_bail
+from utils.jail_ui import send_jail_panel
 
 
 @dataclass
@@ -233,7 +234,7 @@ class Heist(commands.Cog):
                 title="Bank heist failed!",
                 description=(
                     f"Security caught **{thief.display_name}** targeting **{target.display_name}**'s vault.\n"
-                    f"Jail time: **{jail_label}** · Bail: **{bail}** (`/bail` or **Jail Key**)."
+                    f"Jail time: **{jail_label}** · Bail: **{bail}** (`/jail` or **Jail Key**)."
                     f"{unstable_note}"
                 ),
                 color=discord.Color.red(),
@@ -310,27 +311,32 @@ class Heist(commands.Cog):
         bail = fmt_amount(bail_cost_for_tier("wallet"))
         await interaction.response.send_message(
             f"{thief.mention} has been arrested for {minutes} minute(s). "
-            f"Bail: **{bail}** (`/bail`) or a **Jail Key**.",
+            f"Bail: **{bail}** (`/jail` or `/bail`) or a **Jail Key**.",
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @app_commands.command(name="bail", description="Pay bail to release yourself or an arrested player.")
-    @app_commands.describe(user="Arrested player to bail out (omit for yourself)")
+    @app_commands.command(name="jail", description="Open the jail panel — bail, Jail Key, free allies.")
+    @app_commands.guild_only()
+    async def jail(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        await send_jail_panel(interaction, self)
+
+    @app_commands.command(name="bail", description="Pay bail or open the jail panel.")
+    @app_commands.describe(user="Arrested player to bail out (omit to open panel)")
     @app_commands.guild_only()
     async def bail(self, interaction: discord.Interaction, user: discord.Member | None = None) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
         if user is None:
-            if not isinstance(interaction.user, discord.Member):
-                await interaction.response.send_message("Members only.", ephemeral=True)
-                return
-            target = interaction.user
-        else:
-            if user.bot and not config.ALLOW_BOT_PLAYERS:
-                await interaction.response.send_message("Bots cannot be bailed out.", ephemeral=True)
-                return
-            target = user
+            await send_jail_panel(interaction, self)
+            return
+        if user.bot and not config.ALLOW_BOT_PLAYERS:
+            await interaction.response.send_message("Bots cannot be bailed out.", ephemeral=True)
+            return
+        target = user
 
         result = await execute_bail(
             self.bot.db,
