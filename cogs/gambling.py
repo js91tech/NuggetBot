@@ -9,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
+from utils.bot_players import pvp_target_error
 from utils.helpers import fmt_amount, guild_only_message, valid_amount
 from utils.quests import record_quest_event
 
@@ -313,8 +314,9 @@ class Gambling(commands.Cog):
         bet = await self._validate_bet(interaction, amount)
         if bet is None or interaction.guild_id is None:
             return
-        if opponent.bot or opponent.id == interaction.user.id:
-            await interaction.response.send_message("Pick another player.", ephemeral=True)
+        target_err = pvp_target_error(opponent, interaction.user.id)
+        if target_err:
+            await interaction.response.send_message(target_err, ephemeral=True)
             return
         if await self.bot.db.is_restricted(opponent.id, interaction.guild_id):
             await interaction.response.send_message(

@@ -1149,7 +1149,7 @@ class Boss(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if target.bot:
+        if target.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Bots do not need healing.", ephemeral=True)
             return
         if not await self.bot.db.is_downed(target.id, interaction.guild_id):

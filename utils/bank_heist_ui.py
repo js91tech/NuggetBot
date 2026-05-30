@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 
 import config
+from utils.bot_players import pvp_target_error
 from utils.helpers import fmt_amount
 
 if TYPE_CHECKING:
@@ -119,10 +120,9 @@ async def send_bank_heist_panel(
     if interaction.guild_id is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
-    if target.bot or target.id == interaction.user.id:
-        await interaction.response.send_message(
-            "Pick another member — not yourself or a bot.", ephemeral=True,
-        )
+    target_err = pvp_target_error(target, interaction.user.id)
+    if target_err:
+        await interaction.response.send_message(target_err, ephemeral=True)
         return
     if await cog.bot.db.is_restricted(interaction.user.id, interaction.guild_id):
         await interaction.response.send_message(

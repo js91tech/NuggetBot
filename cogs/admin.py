@@ -83,7 +83,7 @@ class Admin(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if user.bot:
+        if user.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Choose a human user.", ephemeral=True)
             return
         if not self._valid_currency_amount(amount):
@@ -128,7 +128,7 @@ class Admin(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if user.bot:
+        if user.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Choose a human user.", ephemeral=True)
             return
         if not self._valid_currency_amount(amount, allow_zero=True):
@@ -149,7 +149,7 @@ class Admin(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if user.bot:
+        if user.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Choose a human user.", ephemeral=True)
             return
 

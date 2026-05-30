@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
+from utils.bot_players import pvp_target_error
 from utils.gear_sets import hack_penalty_multiplier
 from utils.helpers import fmt_amount, guild_only_message
 from utils.stats import hp_bar
@@ -109,8 +110,9 @@ class Hacker(commands.Cog):
         if interaction.guild_id is None or interaction.channel_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if target.bot or target.id == interaction.user.id:
-            await interaction.response.send_message("Choose another non-bot user.", ephemeral=True)
+        target_err = pvp_target_error(target, interaction.user.id)
+        if target_err:
+            await interaction.response.send_message(target_err, ephemeral=True)
             return
 
         existing = await self.bot.db.get_hacker_pot(interaction.guild_id)
@@ -167,8 +169,9 @@ class Hacker(commands.Cog):
         if interaction.guild_id is None or interaction.channel_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if target.bot or target.id == interaction.user.id:
-            await interaction.response.send_message("Choose another non-bot user.", ephemeral=True)
+        target_err = pvp_target_error(target, interaction.user.id)
+        if target_err:
+            await interaction.response.send_message(target_err, ephemeral=True)
             return
 
         pot = await self.bot.db.get_hacker_pot(interaction.guild_id)

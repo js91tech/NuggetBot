@@ -5,7 +5,7 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
         "Economy",
         "**/daily** · **/balance** · **/deposit** · **/withdraw** · **/pay** · **/leaderboard**\n"
         "**/jobs** · **/work** · **/energy** · **/upgrade-energy**\n"
-        "Passive nuggets from chat, VC, and activity.",
+        "Bot Discord accounts can use slash commands and be targeted in PvP (duels, heists, bounties, etc.). Passive chat/VC farming stays human-only to prevent spam.",
     ),
     (
         "Raid & boss",

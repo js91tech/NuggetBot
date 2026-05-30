@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
+from utils.bot_players import pvp_target_error, skip_passive_bot
 from utils.helpers import fmt_amount, guild_only_message, resolve_main_channel, valid_amount
 from utils.quests import record_quest_event
 
@@ -55,7 +56,9 @@ class CoinDropView(discord.ui.View):
                 "This drop is not in your server.", ephemeral=True
             )
             return
-        if not isinstance(interaction.user, discord.Member) or interaction.user.bot:
+        if not isinstance(interaction.user, discord.Member) or (
+            interaction.user.bot and not config.ALLOW_BOT_PLAYERS
+        ):
             await interaction.response.send_message("You cannot claim this.", ephemeral=True)
             return
 
@@ -101,7 +104,7 @@ class Economy(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None:
+        if skip_passive_bot(message.author) or message.guild is None:
             return
 
         if await self.bot.db.is_restricted(message.author.id, message.guild.id):
@@ -173,7 +176,7 @@ class Economy(commands.Cog):
             reward = await self.bot.db.get_config_value(guild.id, "voice_chat_reward")
             for voice_channel in guild.voice_channels:
                 for member in voice_channel.members:
-                    if member.bot or await self.bot.db.is_restricted(member.id, guild.id):
+                    if skip_passive_bot(member) or await self.bot.db.is_restricted(member.id, guild.id):
                         continue
                     await self.bot.db.credit_wallet(member.id, guild.id, reward)
 
@@ -357,8 +360,9 @@ class Economy(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if user.bot or user.id == interaction.user.id:
-            await interaction.response.send_message("Choose another non-bot user.", ephemeral=True)
+        pay_err = pvp_target_error(user, interaction.user.id)
+        if pay_err:
+            await interaction.response.send_message(pay_err, ephemeral=True)
             return
         if not valid_amount(amount):
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)

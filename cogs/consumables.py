@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from items import GIFTABLE_ITEM_IDS, get_item
+from utils.bot_players import pvp_target_error
 from utils.helpers import guild_only_message
 
 
@@ -147,10 +148,9 @@ class Consumables(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if user.bot:
-            await interaction.response.send_message(
-                "You cannot gift items to bots.", ephemeral=True,
-            )
+        gift_err = pvp_target_error(user, interaction.user.id)
+        if gift_err:
+            await interaction.response.send_message(gift_err, ephemeral=True)
             return
         item_id = item.strip()
         shop_item = get_item(item_id)

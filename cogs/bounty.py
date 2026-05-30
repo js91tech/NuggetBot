@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils.bot_players import pvp_target_error, skip_gameplay_bot
 from utils.helpers import (
     contains_word,
     fmt_amount,
@@ -33,8 +34,9 @@ class Bounty(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if target.bot or target.id == interaction.user.id:
-            await interaction.response.send_message("Choose another non-bot user.", ephemeral=True)
+        target_err = pvp_target_error(target, interaction.user.id)
+        if target_err:
+            await interaction.response.send_message(target_err, ephemeral=True)
             return
         minimum = await self.bot.db.get_config_value(interaction.guild_id, "bounty_min_amount")
         tax = await self.bot.db.get_config_value(interaction.guild_id, "bounty_bot_tax")
@@ -138,7 +140,7 @@ class Bounty(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None:
+        if skip_gameplay_bot(message.author) or message.guild is None:
             return
 
         rows = await self.bot.db.list_bounties(message.guild.id)

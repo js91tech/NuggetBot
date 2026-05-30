@@ -10,6 +10,7 @@ from discord.ext import commands
 import config
 from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.avatars import build_avatar_embed_files, get_avatar
+from utils.bot_players import pvp_target_error
 from utils.duel_combat import (
     DuelFighter,
     fighter_from_equipment,
@@ -106,8 +107,9 @@ class Duels(commands.Cog):
         if not isinstance(attacker, discord.Member):
             await interaction.response.send_message("Invalid attacker.", ephemeral=True)
             return
-        if opponent.bot or opponent.id == attacker.id:
-            await interaction.response.send_message("Pick another non-bot player.", ephemeral=True)
+        target_err = pvp_target_error(opponent, attacker.id)
+        if target_err:
+            await interaction.response.send_message(target_err, ephemeral=True)
             return
 
         guild_id = interaction.guild_id

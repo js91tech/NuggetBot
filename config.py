@@ -80,6 +80,10 @@ BANK_HEIST_TIERS: dict[int, dict[str, float]] = {
 }
 GEAR_FIX_COST_FRACTION = 0.80
 
+# Bot Discord accounts can use commands and be PvP targets (passive chat/VC income stays off).
+ALLOW_BOT_PLAYERS = True
+ALLOW_BOT_PASSIVE_INCOME = False
+
 HACK_VIRUS_NAME = "hannah hentai hanta virus"
 HACK_BASE_PENALTY = 15.0
 HACK_PASS_PENALTY = 2.0

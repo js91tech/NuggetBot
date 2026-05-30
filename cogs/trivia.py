@@ -9,6 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
+from utils.bot_players import skip_gameplay_bot
 from utils.helpers import fmt_amount, guild_only_message
 
 
@@ -95,7 +96,7 @@ class Trivia(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None:
+        if skip_gameplay_bot(message.author) or message.guild is None:
             return
 
         active = self.active_rounds.get(message.channel.id)

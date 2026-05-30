@@ -13,8 +13,8 @@ from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.bank_heist_ui import send_bank_heist_panel
 from utils.crew_banking import heist_same_crew_bonus
 from utils.gear_sets import heist_intimidation_bonus
+from utils.bot_players import pvp_target_error
 from utils.helpers import fmt_amount, guild_only_message
-from items import get_item
 
 
 @dataclass
@@ -52,10 +52,13 @@ class Heist(commands.Cog):
         if len(participant_ids) != len(participants):
             await interaction.response.send_message("Crew members must be unique.", ephemeral=True)
             return
-        if target.bot or target.id in participant_ids or any(member.bot for member in participants):
+        target_err = pvp_target_error(target, interaction.user.id)
+        if target_err:
+            await interaction.response.send_message(target_err, ephemeral=True)
+            return
+        if target.id in participant_ids:
             await interaction.response.send_message(
-                "Choose non-bot users and do not target yourself or crew.",
-                ephemeral=True,
+                "Do not target yourself or a crew member.", ephemeral=True,
             )
             return
 
@@ -269,7 +272,7 @@ class Heist(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if thief.bot:
+        if thief.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Bots cannot be arrested.", ephemeral=True)
             return
 
