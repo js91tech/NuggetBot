@@ -50,6 +50,7 @@ from utils.summoner_penalty import (
     summoner_defense_retention,
     summoner_penalty_summary,
 )
+from utils.boss_ui import BossAttackResult, BossFightView, send_boss_fight_panel
 
 BOSS_NAME = "Hannah"
 BOSS_NAME_TOMASS = config.BOSS_NAME_TOMASS
@@ -265,7 +266,7 @@ class Boss(commands.Cog):
             )
         embed.add_field(
             name="Fight back",
-            value="`/attack` to deal damage · `/boss` for status · `/heal` for downed allies",
+            value="Use **`/boss`** for the raid fight panel · `/heal` for downed allies",
             inline=False,
         )
         decay_pct = int(round(config.BOSS_PASSIVE_HP_DECAY_FRACTION_PER_MINUTE * 100))
@@ -728,27 +729,21 @@ class Boss(commands.Cog):
             element=elem,
         )
 
-    @app_commands.command(name="boss", description="Check boss status.")
-    @app_commands.guild_only()
-    async def boss(self, interaction: discord.Interaction) -> None:
-        if interaction.guild_id is None or interaction.guild is None:
-            await interaction.response.send_message(guild_only_message(), ephemeral=True)
-            return
-
-        boss_row = await self.bot.db.apply_boss_passive_decay(interaction.guild_id)
+    async def build_boss_fight_embed(
+        self,
+        guild_id: int,
+        *,
+        boss_row: Any | None = None,
+        member: discord.Member | None = None,
+    ) -> tuple[discord.Embed | None, str | None]:
         if boss_row is None:
-            await interaction.response.send_message("No boss is active right now.")
-            return
-
-        if float(boss_row["hp"]) <= 0:
-            await self._complete_boss_defeat(
-                interaction.guild,
-                interaction=interaction,
-                killer_user_id=None,
-            )
-            return
-
+            boss_row = await self.bot.db.apply_boss_passive_decay(guild_id)
+        if boss_row is None:
+            return None, "No boss is active right now."
         hp = float(boss_row["hp"])
+        if hp <= 0:
+            return None, "The boss is already defeated."
+
         max_hp = float(boss_row["max_hp"])
         variant = str(boss_row["variant"])
         bar = hp_bar(hp, max_hp)
@@ -761,6 +756,9 @@ class Boss(commands.Cog):
         embed.add_field(name="HP", value=f"{fmt_amount(hp)} / {fmt_amount(max_hp)}", inline=True)
         threat = config.BOSS_VARIANTS[variant]["threat"]
         embed.add_field(name="Threat", value=str(threat), inline=True)
+        element = boss_row["element"]
+        if element:
+            embed.add_field(name="Element", value=str(element).title(), inline=True)
         summoner_id = boss_summoner_id(boss_row)
         if summoner_id is not None:
             embed.add_field(
@@ -768,32 +766,49 @@ class Boss(commands.Cog):
                 value=f"<@{summoner_id}> — {summoner_penalty_summary()}",
                 inline=False,
             )
-        embed.set_footer(text="Use /attack to fight · /heal for downed allies")
-        await interaction.response.send_message(embed=embed)
+        if member is not None:
+            loadout = await self._loadout(member.id, guild_id)
+            weapon = loadout.primary.name if loadout.primary else "bare hands"
+            if loadout.off_hand is not None:
+                weapon = f"{weapon} + {loadout.off_hand.name}"
+            embed.add_field(name="Your loadout", value=weapon, inline=True)
+            damage_rows = await self.bot.db.list_boss_damage(guild_id)
+            your_damage = 0.0
+            for row in damage_rows:
+                if int(row["user_id"]) == member.id:
+                    your_damage = float(row["damage"])
+                    break
+            embed.add_field(
+                name="Your damage",
+                value=fmt_amount(your_damage) if your_damage > 0 else "_None yet_",
+                inline=True,
+            )
+        embed.set_footer(text="⚔️ Attack · Refresh · Raid LB · /cast and /heal supported")
+        return embed, None
 
-    @app_commands.command(name="attack", description="Attack the active boss.")
-    @app_commands.guild_only()
-    async def attack(self, interaction: discord.Interaction) -> None:
-        if interaction.guild_id is None or interaction.guild is None:
-            await interaction.response.send_message(guild_only_message(), ephemeral=True)
-            return
-        if await self.bot.db.is_restricted(interaction.user.id, interaction.guild_id):
-            await interaction.response.send_message("You cannot attack right now.", ephemeral=True)
-            return
+    async def execute_boss_attack(
+        self,
+        member: discord.Member,
+        guild: discord.Guild,
+        *,
+        interaction: discord.Interaction | None = None,
+    ) -> BossAttackResult:
+        guild_id = guild.id
+        if await self.bot.db.is_restricted(member.id, guild_id):
+            return BossAttackResult(error="You cannot attack right now.")
 
-        boss = await self.bot.db.get_active_boss(interaction.guild_id)
+        boss = await self.bot.db.get_active_boss(guild_id)
         if boss is None:
-            await interaction.response.send_message("No boss is active right now.", ephemeral=True)
-            return
+            return BossAttackResult(error="No boss is active right now.")
 
-        loadout = await self._loadout(interaction.user.id, interaction.guild_id)
+        loadout = await self._loadout(member.id, guild_id)
         set_bonus = detect_set_bonus(loadout.primary, loadout.armor)
-        progress = await self.bot.db.get_user_progress(interaction.user.id, interaction.guild_id)
+        progress = await self.bot.db.get_user_progress(member.id, guild_id)
         prestige = int(progress["prestige_level"])
-        summoner_debuff = is_summoner_debuffed(boss, interaction.user.id)
+        summoner_debuff = is_summoner_debuffed(boss, member.id)
         crit_mult = config.SUMMONER_DEBUFF_CRIT_RETENTION if summoner_debuff else 1.0
-        await self.bot.db.ensure_jester_class(interaction.user.id, interaction.guild_id)
-        class_id = await self.bot.db.get_class_id(interaction.user.id, interaction.guild_id)
+        await self.bot.db.ensure_jester_class(member.id, guild_id)
+        class_id = await self.bot.db.get_class_id(member.id, guild_id)
         boss_element = None
         with contextlib.suppress(KeyError, TypeError):
             boss_element = str(boss["element"])
@@ -803,15 +818,9 @@ class Boss(commands.Cog):
             boss_element=boss_element,
             for_boss=True,
         )
-        bonuses = await self.bot.db.get_equipped_aspect_bonuses(
-            interaction.user.id,
-            interaction.guild_id,
-        )
+        bonuses = await self.bot.db.get_equipped_aspect_bonuses(member.id, guild_id)
         aspect_note = ""
-        rows = await self.bot.db.list_equipped_aspect_rows(
-            interaction.user.id,
-            interaction.guild_id,
-        )
+        rows = await self.bot.db.list_equipped_aspect_rows(member.id, guild_id)
         if rows:
             ctx = replace(
                 ctx,
@@ -821,10 +830,7 @@ class Boss(commands.Cog):
             names = ", ".join(instance_from_row(r).name for r in rows[:3])
             aspect_note = f" · Aspects: **{names}**"
         spell_note = ""
-        skill_id = await self.bot.db.consume_pending_spell(
-            interaction.user.id,
-            interaction.guild_id,
-        )
+        skill_id = await self.bot.db.consume_pending_spell(member.id, guild_id)
         if skill_id:
             skill = get_skill(skill_id)
             if skill is not None:
@@ -836,9 +842,7 @@ class Boss(commands.Cog):
                         extra_crit=ctx.extra_crit + spell_state.extra_crit,
                     )
                     spell_note = f" via **{skill.name}**"
-        if await self.bot.db.take_pending_consumable(
-            interaction.user.id, interaction.guild_id, "raid_potion",
-        ):
+        if await self.bot.db.take_pending_consumable(member.id, guild_id, "raid_potion"):
             ctx = replace(ctx, damage_mult=ctx.damage_mult * 1.2)
             spell_note += " · **Raid Potion** +20%"
         damage, attack_critical, attack_verb = roll_player_damage(
@@ -850,54 +854,47 @@ class Boss(commands.Cog):
         )
         if summoner_debuff:
             damage = apply_summoner_attack_debuff(damage)
-        mana_gain = await self.bot.db.restore_mana_from_damage(
-            interaction.user.id,
-            interaction.guild_id,
-            damage,
-        )
+        mana_gain = await self.bot.db.restore_mana_from_damage(member.id, guild_id, damage)
         heal_applied = 0.0
-        updated = await self.bot.db.damage_boss(interaction.guild_id, interaction.user.id, damage)
+        updated = await self.bot.db.damage_boss(guild_id, member.id, damage)
         xp_gain = max(1, int(damage * config.CLASS_XP_PER_BOSS_DAMAGE))
-        await self.bot.db.add_class_xp(interaction.user.id, interaction.guild_id, xp_gain)
+        await self.bot.db.add_class_xp(member.id, guild_id, xp_gain)
         if updated is not None:
-            _, heal_applied = await self.bot.db.increment_boss_attack_count(interaction.guild_id)
+            _, heal_applied = await self.bot.db.increment_boss_attack_count(guild_id)
         if heal_applied > 0:
-            updated = await self.bot.db.get_active_boss(interaction.guild_id)
+            updated = await self.bot.db.get_active_boss(guild_id)
         if updated is None:
-            await interaction.response.send_message("No boss is active right now.", ephemeral=True)
-            return
+            return BossAttackResult(error="No boss is active right now.")
 
-        await record_quest_event(
-            self.bot.db,
-            interaction.guild_id,
-            interaction.user.id,
-            "boss_attack",
-        )
+        await record_quest_event(self.bot.db, guild_id, member.id, "boss_attack")
 
         if float(updated["hp"]) <= 0:
             await self._complete_boss_defeat(
-                interaction.guild,
+                guild,
                 interaction=interaction,
-                killer_user_id=interaction.user.id,
+                killer_user_id=member.id,
             )
-            return
+            defeat_embed = discord.Embed(
+                title="Boss defeated!",
+                description=f"**{member.display_name}** landed the final blow!",
+                color=discord.Color.gold(),
+            )
+            return BossAttackResult(embed=defeat_embed, defeated=True)
 
         boss_hp = float(updated["hp"])
         boss_max = float(updated["max_hp"])
-        phase_pct = await self.bot.db.try_mark_boss_phase(interaction.guild_id, boss_hp / boss_max)
+        phase_pct = await self.bot.db.try_mark_boss_phase(guild_id, boss_hp / boss_max)
         phase_note = ""
         if phase_pct is not None:
             phase_note = f"\n**Phase {phase_pct}%** — {BOSS_NAME} enrages!"
 
-        counter_text = await self._maybe_counterattack(interaction.guild_id, updated)
+        counter_text = await self._maybe_counterattack(guild_id, updated)
 
-        boss_hp = float(updated["hp"])
-        boss_max = float(updated["max_hp"])
         bar = hp_bar(boss_hp, boss_max)
         pct = int(round(100 * boss_hp / boss_max)) if boss_max > 0 else 0
         active_name = str(updated["name"])
         embed = discord.Embed(
-            title=f"{interaction.user.display_name} → {active_name}",
+            title=f"{member.display_name} → {active_name}",
             color=discord.Color.green() if attack_critical else discord.Color.blurple(),
         )
         weapon_text = loadout.primary.name if loadout.primary is not None else "bare hands"
@@ -957,11 +954,76 @@ class Boss(commands.Cog):
         if phase_note:
             embed.add_field(name="Boss phase", value=phase_note.strip(), inline=False)
         if set_bonus is not None:
-            embed.set_footer(text=f"{set_bonus.name} set bonus active")
-        await interaction.response.send_message(
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions.none(),
+            embed.set_footer(text=f"{set_bonus.name} set bonus active · Press ⚔️ Attack again")
+        else:
+            embed.set_footer(text="Press ⚔️ Attack again · Refresh for live HP")
+        return BossAttackResult(embed=embed)
+
+    @app_commands.command(name="boss", description="Open the boss raid fight panel.")
+    @app_commands.guild_only()
+    async def boss(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None or interaction.guild is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        await send_boss_fight_panel(interaction, self)
+
+    @app_commands.command(name="attack", description="Attack the active boss.")
+    @app_commands.guild_only()
+    async def attack(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None or interaction.guild is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Members only.", ephemeral=True)
+            return
+
+        result = await self.execute_boss_attack(
+            interaction.user,
+            interaction.guild,
+            interaction=interaction,
         )
+        if result.error:
+            await interaction.response.send_message(result.error, ephemeral=True)
+            return
+        if result.defeated:
+            if result.embed is not None and interaction.response.is_done():
+                await interaction.followup.send(embed=result.embed, ephemeral=True)
+            return
+        view = BossFightView(self, interaction.guild_id, interaction.user.id)
+        await interaction.response.send_message(
+            embed=result.embed,
+            view=view,
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="boss-status", description="Quick boss HP check (no buttons).")
+    @app_commands.guild_only()
+    async def boss_status(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None or interaction.guild is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        boss_row = await self.bot.db.apply_boss_passive_decay(interaction.guild_id)
+        if boss_row is None:
+            await interaction.response.send_message("No boss is active right now.")
+            return
+
+        if float(boss_row["hp"]) <= 0:
+            await self._complete_boss_defeat(
+                interaction.guild,
+                interaction=interaction,
+                killer_user_id=None,
+            )
+            return
+
+        embed, err = await self.build_boss_fight_embed(
+            interaction.guild_id,
+            boss_row=boss_row,
+        )
+        if err or embed is None:
+            await interaction.response.send_message(err or "No boss active.")
+            return
+        await interaction.response.send_message(embed=embed)
 
     async def _maybe_counterattack(self, guild_id: int, boss_row: Any) -> str:
         variant = str(boss_row["variant"])

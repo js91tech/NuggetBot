@@ -87,9 +87,10 @@ python bot.py
 
 | Command | Description |
 |---------|-------------|
-| `/attack` | Attack the active boss with equipped weapon flavor and damage |
+| `/boss` | Open the interactive raid fight panel (attack, refresh, leaderboard) |
+| `/attack` | Strike the boss once (includes fight panel buttons) |
+| `/boss-status` | Quick HP check without buttons |
 | `/heal @user` | Revive a downed teammate |
-| `/boss` | Check boss status |
 | `/summon variant` | **Admin only:** force-spawn a boss |
 
 ### Raid avatars
