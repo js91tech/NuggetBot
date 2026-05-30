@@ -9,14 +9,14 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Raid & boss",
-        "**/attack** · **/heal** · **/boss** · **/raid-leaderboard**\n"
+        "**/boss** · **/attack** · **/heal** · **/boss-status** · **/raid-leaderboard**\n"
         "**/shop** · **/buy** · **/equip** · **/craft** · **/prestige**\n"
         "**/dungeon** — solo or **party** runs · **/alchemy** · **/season**",
     ),
     (
         "PvP & casino",
         "**/duel** · **/coinflip** · **/blackjack** · **/slots** · **/jackpot**\n"
-        "**/crew** — bank, join, deposit, withdraw, crew loans, repay; same persistent crew on `/heist` +5% each\n"
+        "**/crew** — interactive crew panel (join, deposit, withdraw, loans, repay)\n"
         "**/territory** — 5 zones, hourly crew income, guards, sieges; zone perks (shop/craft/heist)",
     ),
     (

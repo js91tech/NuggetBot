@@ -87,9 +87,10 @@ python bot.py
 
 | Command | Description |
 |---------|-------------|
-| `/attack` | Attack the active boss with equipped weapon flavor and damage |
+| `/boss` | Open the interactive raid fight panel (attack, refresh, leaderboard) |
+| `/attack` | Strike the boss once (includes fight panel buttons) |
+| `/boss-status` | Quick HP check without buttons |
 | `/heal @user` | Revive a downed teammate |
-| `/boss` | Check boss status |
 | `/summon variant` | **Admin only:** force-spawn a boss |
 
 ### Raid avatars
@@ -112,7 +113,7 @@ Five avatars ship with the bot (`nugget_raider` is free). Regenerate art with `p
 | `/sell-worn` | Sell all battle-worn drops |
 | `/use` | Raid potion, energy drink, duel scroll |
 | `/dungeon` | Solo 5-room dungeon run |
-| `/crew` | Bank, join, deposit, withdraw, crew loans, repay, leaderboard |
+| `/crew` | Interactive crew panel — join, deposit, withdraw, loans, repay |
 | `/slots` · `/jackpot` | Casino slots + server jackpot |
 
 ### Crew banking
@@ -121,7 +122,7 @@ Persistent crews share a **treasury** funded by member deposits. Deposits earn c
 
 | `/crew` action | What it does |
 |----------------|--------------|
-| **Bank / status** | Treasury, your contributed balance, active loan, level perks |
+| **Bank / status** | Opens the interactive crew panel (treasury, deposits, loans, buttons) |
 | **Deposit** | Move nuggets from your wallet into the crew treasury (tracks your contribution) |
 | **Withdraw** | Pull up to what you deposited (blocked while you owe a loan) |
 | **Loan** | Borrow from the treasury within your crew level cap (min 50 nuggets) |
