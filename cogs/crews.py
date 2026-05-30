@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import logging
-import time
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 import config
-from utils.crew_banking import perks_summary
+from utils.crew_ui import build_crew_leaderboard_embed, send_crew_panel
 from utils.helpers import fmt_amount, guild_only_message, send_error, valid_amount
-from utils.territories import TERRITORY_MAP, format_crew_territory_summary, perks_from_held
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +54,7 @@ class Crews(commands.Cog):
 
     @app_commands.command(
         name="crew",
-        description="Crew bank: join, deposit, withdraw, loans, repay, leaderboard.",
+        description="Crew bank panel: join, deposit, withdraw, loans, repay, leaderboard.",
     )
     @app_commands.describe(
         action="What to do",
@@ -97,17 +95,7 @@ class Crews(commands.Cog):
                     "No crews yet. **Join crew** to found one.", ephemeral=True,
                 )
                 return
-            lines = [
-                f"**{i}. {row['crew_name']}** — Lv{int(row['level'])} · "
-                f"{fmt_amount(float(row['score']))} treasury · {int(row['xp'])} XP"
-                for i, row in enumerate(rows, 1)
-            ]
-            embed = discord.Embed(
-                title="Crew leaderboard",
-                description="\n".join(lines),
-                color=discord.Color.dark_gold(),
-            )
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=build_crew_leaderboard_embed(rows))
             return
 
         if action == "join":
@@ -153,11 +141,11 @@ class Crews(commands.Cog):
 
         banking_actions = {"bank", "deposit", "withdraw", "loan", "repay"}
         if action in banking_actions:
+            if action == "bank":
+                await send_crew_panel(interaction, self)
+                return
             await interaction.response.defer(ephemeral=True)
             try:
-                if action == "bank":
-                    await self._send_bank_embed(interaction, guild_id, uid)
-                    return
                 if amount is None:
                     await interaction.followup.send(
                         "Set an **amount** for this action.", ephemeral=True,
@@ -254,70 +242,6 @@ class Crews(commands.Cog):
             return
 
         await interaction.response.send_message("Unknown action.", ephemeral=True)
-
-    async def _send_bank_embed(
-        self, interaction: discord.Interaction, guild_id: int, uid: int,
-    ) -> None:
-        snap = await self.bot.db.get_crew_banking_snapshot(uid, guild_id)
-        if snap is None:
-            await interaction.followup.send(
-                "You are not in a crew. Use **Join crew** to create or join one.",
-                ephemeral=True,
-            )
-            return
-        members = await self.bot.db.list_crew_members(guild_id, snap["crew_name"])
-        member_names = []
-        if interaction.guild:
-            for row in members[:8]:
-                m = interaction.guild.get_member(int(row["user_id"]))
-                member_names.append(m.display_name if m else f"User {row['user_id']}")
-        level = int(snap["level"])
-        embed = discord.Embed(
-            title=f"Crew {snap['crew_name']}",
-            description="\n".join(member_names) or "_No members_",
-            color=discord.Color.blue(),
-        )
-        embed.add_field(name="Treasury", value=fmt_amount(float(snap["treasury"])), inline=True)
-        embed.add_field(name="Your deposits", value=fmt_amount(float(snap["contributed"])), inline=True)
-        embed.add_field(name="Level / XP", value=f"{level} / {int(snap['xp'])}", inline=True)
-        embed.add_field(name="Perks", value=perks_summary(level), inline=False)
-        held = await self.bot.db.list_crew_held_territories(guild_id, snap["crew_name"])
-        if held:
-            income_total = sum(
-                TERRITORY_MAP[t].income_per_hour for t, _ in held if t in TERRITORY_MAP
-            )
-            embed.add_field(
-                name="Territories",
-                value=format_crew_territory_summary(
-                    held, income_per_hour_total=income_total,
-                ),
-                inline=False,
-            )
-            perk_lines = perks_from_held({t for t, _ in held}).summary_lines()
-            if perk_lines:
-                embed.add_field(
-                    name="Zone perks",
-                    value="\n".join(perk_lines),
-                    inline=False,
-                )
-        loan = snap["loan"]
-        if loan is not None:
-            remaining = float(loan["remaining"])
-            due_at = float(loan["due_at"])
-            overdue = time.time() > due_at
-            embed.add_field(
-                name="Active loan",
-                value=(
-                    f"Remaining **{fmt_amount(remaining)}** of "
-                    f"{fmt_amount(float(loan['principal']))}"
-                    f"{' — **overdue**' if overdue else ''}"
-                ),
-                inline=False,
-            )
-        embed.set_footer(
-            text="Deposit · Withdraw · Borrow · Repay · /territory for zones",
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:
