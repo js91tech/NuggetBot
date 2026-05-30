@@ -80,6 +80,12 @@ BANK_HEIST_TIERS: dict[int, dict[str, float]] = {
 }
 GEAR_FIX_COST_FRACTION = 0.80
 
+# Bail — flat cost by arrest source (paid from pocket to clear arrested_until).
+BAIL_WALLET_HEIST = 15_000.0
+BAIL_BANK_TIER_1 = 30_000.0
+BAIL_BANK_TIER_2 = 40_000.0
+BAIL_BANK_TIER_3 = 55_000.0
+
 # Bot Discord accounts can use commands and be PvP targets (passive chat/VC income stays off).
 ALLOW_BOT_PLAYERS = True
 ALLOW_BOT_PASSIVE_INCOME = False

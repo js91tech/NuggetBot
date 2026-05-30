@@ -4,9 +4,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import config
 from items import GIFTABLE_ITEM_IDS, get_item
 from utils.bot_players import pvp_target_error
-from utils.helpers import guild_only_message
+from utils.helpers import fmt_amount, guild_only_message
+from utils.jail import execute_jail_key
 
 
 class Consumables(commands.Cog):
@@ -74,10 +76,18 @@ class Consumables(commands.Cog):
         return choices
 
     @app_commands.command(name="use", description="Use a consumable from your inventory.")
-    @app_commands.describe(item="Consumable to use")
+    @app_commands.describe(
+        item="Consumable to use",
+        target="Arrested player (Jail Key only — omit to use on yourself)",
+    )
     @app_commands.autocomplete(item=use_item_autocomplete)
     @app_commands.guild_only()
-    async def use_item(self, interaction: discord.Interaction, item: str) -> None:
+    async def use_item(
+        self,
+        interaction: discord.Interaction,
+        item: str,
+        target: discord.Member | None = None,
+    ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
@@ -99,6 +109,12 @@ class Consumables(commands.Cog):
             )
             return
 
+        if target is not None and item_id != "jail_key":
+            await interaction.response.send_message(
+                "Only **Jail Key** accepts a target player.", ephemeral=True,
+            )
+            return
+
         if item_id == "energy_drink":
             if not await self.bot.db.consume_inventory_item(uid, guild_id, item_id):
                 await interaction.response.send_message(
@@ -110,6 +126,34 @@ class Consumables(commands.Cog):
                 f"**Energy Drink** — energy restored to **{new_energy}**.",
                 ephemeral=True,
             )
+            return
+
+        if item_id == "jail_key":
+            if target is not None and target.bot and not config.ALLOW_BOT_PLAYERS:
+                await interaction.response.send_message(
+                    "Bots cannot be freed with a Jail Key.", ephemeral=True,
+                )
+                return
+            release_target = target if target is not None else interaction.user
+            if not isinstance(release_target, discord.Member):
+                await interaction.response.send_message("Members only.", ephemeral=True)
+                return
+            result = await execute_jail_key(
+                self.bot.db,
+                uid,
+                release_target.id,
+                guild_id,
+            )
+            if not result.ok:
+                await interaction.response.send_message(result.error or "Use failed.", ephemeral=True)
+                return
+            if release_target.id == uid:
+                await interaction.response.send_message(result.message, ephemeral=True)
+            else:
+                await interaction.response.send_message(
+                    f"{result.message} ({release_target.display_name})",
+                    ephemeral=True,
+                )
             return
 
         if not await self.bot.db.consume_inventory_item(uid, guild_id, item_id):

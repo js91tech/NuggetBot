@@ -15,6 +15,8 @@ from utils.crew_banking import heist_same_crew_bonus
 from utils.gear_sets import heist_intimidation_bonus
 from utils.bot_players import pvp_target_error
 from utils.helpers import fmt_amount, guild_only_message
+from utils.jail import bail_cost_for_tier, execute_bail
+from utils.jail_ui import send_jail_panel
 
 
 @dataclass
@@ -206,7 +208,12 @@ class Heist(commands.Cog):
         success_chance = float(spec["success"])
         if random.random() > success_chance:
             jail_seconds = float(spec["jail_seconds"])
-            await self.bot.db.set_arrested_until(thief.id, guild_id, current + jail_seconds)
+            await self.bot.db.set_arrested_until(
+                thief.id,
+                guild_id,
+                current + jail_seconds,
+                arrest_tier=str(tier),
+            )
             unstable_note = ""
             if tier == 3:
                 slot = await self.bot.db.mark_random_equipped_unstable(
@@ -222,11 +229,13 @@ class Heist(commands.Cog):
                     unstable_note = f"\nYour **{name}** ({slot}) is **unstable** — use `/fix`."
             hours = jail_seconds / 3600
             jail_label = f"{int(hours)}h" if hours >= 1 else f"{int(jail_seconds // 60)}m"
+            bail = fmt_amount(bail_cost_for_tier(str(tier)))
             embed = discord.Embed(
                 title="Bank heist failed!",
                 description=(
                     f"Security caught **{thief.display_name}** targeting **{target.display_name}**'s vault.\n"
-                    f"Jail time: **{jail_label}**.{unstable_note}"
+                    f"Jail time: **{jail_label}** · Bail: **{bail}** (`/jail` or **Jail Key**)."
+                    f"{unstable_note}"
                 ),
                 color=discord.Color.red(),
             )
@@ -295,13 +304,58 @@ class Heist(commands.Cog):
             thief.id,
             interaction.guild_id,
             current + arrest_seconds,
+            arrest_tier="wallet",
         )
         self.pending_arrests.pop(key, None)
         minutes = int(arrest_seconds // 60)
+        bail = fmt_amount(bail_cost_for_tier("wallet"))
         await interaction.response.send_message(
-            f"{thief.mention} has been arrested for {minutes} minute(s).",
+            f"{thief.mention} has been arrested for {minutes} minute(s). "
+            f"Bail: **{bail}** (`/jail` or `/bail`) or a **Jail Key**.",
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+    @app_commands.command(name="jail", description="Open the jail panel — bail, Jail Key, free allies.")
+    @app_commands.guild_only()
+    async def jail(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        await send_jail_panel(interaction, self)
+
+    @app_commands.command(name="bail", description="Pay bail or open the jail panel.")
+    @app_commands.describe(user="Arrested player to bail out (omit to open panel)")
+    @app_commands.guild_only()
+    async def bail(self, interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if user is None:
+            await send_jail_panel(interaction, self)
+            return
+        if user.bot and not config.ALLOW_BOT_PLAYERS:
+            await interaction.response.send_message("Bots cannot be bailed out.", ephemeral=True)
+            return
+        target = user
+
+        result = await execute_bail(
+            self.bot.db,
+            interaction.user.id,
+            target.id,
+            interaction.guild_id,
+        )
+        if not result.ok:
+            await interaction.response.send_message(result.error or "Bail failed.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="Bail posted",
+            description=result.message,
+            color=discord.Color.green(),
+        )
+        if target.id != interaction.user.id:
+            embed.add_field(name="Released", value=target.display_name, inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Heist(bot))

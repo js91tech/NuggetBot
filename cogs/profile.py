@@ -8,6 +8,7 @@ from discord.ext import commands
 
 import config
 from utils.helpers import fmt_amount, guild_only_message
+from utils.jail import bail_cost_for_tier, format_jail_time_remaining
 from utils.mana import mana_bar
 from utils.territories import TERRITORY_MAP, perks_from_held
 
@@ -58,7 +59,12 @@ class Profile(commands.Cog):
         if heist_left > 0:
             cooldown_lines.append(f"Heist: **{int(heist_left // 60)}m**")
         if float(user_row["arrested_until"]) > now:
-            cooldown_lines.append("**Arrested**")
+            tier = await self.bot.db.get_arrest_tier(uid, guild_id)
+            remaining = float(user_row["arrested_until"]) - now
+            bail = fmt_amount(bail_cost_for_tier(tier))
+            cooldown_lines.append(
+                f"**Jail** {format_jail_time_remaining(remaining)} · Bail **{bail}** (`/jail`)"
+            )
         if float(user_row["downed_until"]) > now:
             cooldown_lines.append("**Downed**")
 
