@@ -55,8 +55,8 @@ python bot.py
 | Command | Description |
 |---------|-------------|
 | `/daily` | Claim 75 nuggets daily |
-| `/balance` | Pocket + bank panel with deposit/withdraw buttons |
-| `/deposit amount` | Move nuggets pocket → bank (safer than pocket, but `/bank-heist` targets bank) |
+| `/balance` | Pocket + bank panel — deposit, withdraw, **+10k storage** upgrades |
+| `/deposit amount` | Move nuggets pocket → bank (50k base cap, upgradeable to 500k) |
 | `/withdraw amount` | Move nuggets bank → pocket |
 | `/leaderboard` | Top 10 by net worth (pocket + bank) |
 | `/pay @user amount` | Send nuggets from your pocket to another user |

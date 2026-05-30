@@ -80,6 +80,12 @@ BANK_HEIST_TIERS: dict[int, dict[str, float]] = {
 }
 GEAR_FIX_COST_FRACTION = 0.80
 
+# Personal bank vault capacity (upgradeable with storage tokens).
+BANK_BASE_CAPACITY = 50_000.0
+BANK_STORAGE_PER_TOKEN = 10_000.0
+BANK_STORAGE_TOKEN_COST = 15_000.0
+BANK_MAX_CAPACITY = 500_000.0
+
 # Bot Discord accounts can use commands and be PvP targets (passive chat/VC income stays off).
 ALLOW_BOT_PLAYERS = True
 ALLOW_BOT_PASSIVE_INCOME = False

@@ -4,6 +4,7 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Economy",
         "**/daily** · **/balance** · **/deposit** · **/withdraw** · **/pay** · **/leaderboard**\n"
+        "Bank starts at **50k** cap — upgrade +10k storage for **15k** each (max **500k**).\n"
         "**/jobs** · **/work** · **/energy** · **/upgrade-energy**\n"
         "Bot Discord accounts can use slash commands and be targeted in PvP (duels, heists, bounties, etc.). Passive chat/VC farming stays human-only to prevent spam.",
     ),

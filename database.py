@@ -285,6 +285,7 @@ class Database:
                 guild_id BIGINT NOT NULL,
                 wallet REAL NOT NULL DEFAULT 0 CHECK (wallet >= 0),
                 bank REAL NOT NULL DEFAULT 0 CHECK (bank >= 0),
+                bank_storage_tokens INTEGER NOT NULL DEFAULT 0 CHECK (bank_storage_tokens >= 0),
                 last_daily REAL NOT NULL DEFAULT 0,
                 last_heist REAL NOT NULL DEFAULT 0,
                 last_bank_heist REAL NOT NULL DEFAULT 0,
@@ -455,6 +456,29 @@ class Database:
         await self._migrate_territory_integration()
         await self._migrate_personal_bank()
         await self._migrate_bank_heist()
+        await self._migrate_bank_storage()
+
+    async def _migrate_bank_storage(self) -> None:
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'users' AND column_name = 'bank_storage_tokens'
+                """,
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN bank_storage_tokens INTEGER NOT NULL DEFAULT 0",
+                )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if "bank_storage_tokens" not in existing:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN bank_storage_tokens INTEGER NOT NULL DEFAULT 0",
+                )
+        await self.conn.commit()
 
     async def _migrate_bank_heist(self) -> None:
         if self.is_postgres:
@@ -1814,29 +1838,99 @@ class Database:
         row = await self.get_user(user_id, guild_id)
         return float(row["wallet"]) + float(row["bank"])
 
-    async def deposit_to_bank(self, user_id: int, guild_id: int, amount: float) -> bool:
-        if amount <= 0:
-            return False
+    async def get_bank_storage_tokens(self, user_id: int, guild_id: int) -> int:
+        row = await self.get_user(user_id, guild_id)
+        return int(row["bank_storage_tokens"])
+
+    async def get_bank_capacity(self, user_id: int, guild_id: int) -> float:
+        from utils.bank_capacity import bank_capacity
+
+        tokens = await self.get_bank_storage_tokens(user_id, guild_id)
+        return bank_capacity(tokens)
+
+    async def get_bank_deposit_room(self, user_id: int, guild_id: int) -> float:
+        from utils.bank_capacity import bank_deposit_room
+
+        row = await self.get_user(user_id, guild_id)
+        tokens = int(row["bank_storage_tokens"])
+        return bank_deposit_room(float(row["bank"]), tokens)
+
+    async def buy_bank_storage_token(self, user_id: int, guild_id: int) -> str | None:
+        import config
+        from utils.bank_capacity import bank_capacity, max_storage_tokens
+
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
             cursor = await self.conn.execute(
-                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                """
+                SELECT wallet, bank_storage_tokens
+                FROM users WHERE user_id = ? AND guild_id = ?
+                """,
                 (user_id, guild_id),
             )
             row = await cursor.fetchone()
-            if row is None or float(row["wallet"]) < amount:
+            if row is None:
                 await self.conn.commit()
-                return False
+                return "user_error"
+            tokens = int(row["bank_storage_tokens"])
+            if tokens >= max_storage_tokens():
+                await self.conn.commit()
+                return "at_max_capacity"
+            if bank_capacity(tokens + 1) > config.BANK_MAX_CAPACITY:
+                await self.conn.commit()
+                return "at_max_capacity"
+            cost = config.BANK_STORAGE_TOKEN_COST
+            if float(row["wallet"]) < cost:
+                await self.conn.commit()
+                return "insufficient_funds"
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet - ?, bank_storage_tokens = bank_storage_tokens + 1
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (cost, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return None
+
+    async def deposit_to_bank(self, user_id: int, guild_id: int, amount: float) -> float:
+        if amount <= 0:
+            return 0.0
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                """
+                SELECT wallet, bank, bank_storage_tokens
+                FROM users WHERE user_id = ? AND guild_id = ?
+                """,
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await self.conn.commit()
+                return 0.0
+            from utils.bank_capacity import bank_deposit_room
+
+            wallet = float(row["wallet"])
+            room = bank_deposit_room(float(row["bank"]), int(row["bank_storage_tokens"]))
+            if room <= 0 or wallet <= 0:
+                await self.conn.commit()
+                return 0.0
+            move = min(amount, wallet, room)
+            if move <= 0:
+                await self.conn.commit()
+                return 0.0
             await self.conn.execute(
                 """
                 UPDATE users
                 SET wallet = wallet - ?, bank = bank + ?
                 WHERE user_id = ? AND guild_id = ?
                 """,
-                (amount, amount, user_id, guild_id),
+                (move, move, user_id, guild_id),
             )
             await self.conn.commit()
-            return True
+            return move
 
     async def withdraw_from_bank(self, user_id: int, guild_id: int, amount: float) -> bool:
         if amount <= 0:
@@ -1866,21 +1960,31 @@ class Database:
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
             cursor = await self.conn.execute(
-                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                """
+                SELECT wallet, bank, bank_storage_tokens
+                FROM users WHERE user_id = ? AND guild_id = ?
+                """,
                 (user_id, guild_id),
             )
             row = await cursor.fetchone()
-            amount = float(row["wallet"]) if row is not None else 0.0
+            if row is None:
+                await self.conn.commit()
+                return 0.0
+            from utils.bank_capacity import bank_deposit_room
+
+            wallet = float(row["wallet"])
+            room = bank_deposit_room(float(row["bank"]), int(row["bank_storage_tokens"]))
+            amount = min(wallet, room)
             if amount <= 0:
                 await self.conn.commit()
                 return 0.0
             await self.conn.execute(
                 """
                 UPDATE users
-                SET wallet = 0, bank = bank + ?
+                SET wallet = wallet - ?, bank = bank + ?
                 WHERE user_id = ? AND guild_id = ?
                 """,
-                (amount, user_id, guild_id),
+                (amount, amount, user_id, guild_id),
             )
             await self.conn.commit()
             return amount
