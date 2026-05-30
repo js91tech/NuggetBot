@@ -9,7 +9,7 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Raid & boss",
-        "**/attack** · **/heal** · **/boss** · **/raid-leaderboard**\n"
+        "**/boss** · **/attack** · **/heal** · **/boss-status** · **/raid-leaderboard**\n"
         "**/shop** · **/buy** · **/equip** · **/craft** · **/prestige**\n"
         "**/dungeon** — solo or **party** runs · **/alchemy** · **/season**",
     ),
