@@ -22,12 +22,13 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Character",
         "**/class** · **/cast** · **/mana** · **/aspects** · **/avatar** (upload custom)\n"
-        "**/use** — raid potion, energy drink, duel scroll · **/gift** — chia seeds to friends",
+        "**/use** — raid potion, energy drink, duel scroll, **jail key** · **/gift** — chia seeds",
         "**/profile** · **/stats** · **/quests** · **/achievements** · **/fix** (unstable gear)",
     ),
     (
         "Chaos modules",
-        "**/bounty** · **/bounty-board** · **/heist** · **/bank-heist** · **/hack** · **/trivia**\n"
+        "**/bounty** · **/bounty-board** · **/heist** · **/arrest** · **/bail** · **/bank-heist** · **/hack** · **/trivia**\n"
+        "**/bail** — wallet heist **15k** · bank tiers **30k / 40k / 55k** · or use **Jail Key** (75k shop)\n"
         "**/hall-of-fame** · **/event** (admins)",
     ),
 )

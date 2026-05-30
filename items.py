@@ -356,6 +356,15 @@ DUEL_SCROLL = ShopItem(
     "Use before /duel: next duel strike deals +15% damage.",
     shop_listed=True,
 )
+JAIL_KEY = ShopItem(
+    "jail_key",
+    "Jail Key",
+    "consumable",
+    75_000,
+    0,
+    "Use on yourself or an arrested ally to walk free instantly.",
+    shop_listed=True,
+)
 CHIA_SEEDS = ShopItem(
     "chia_seeds",
     "Chia Seeds",
@@ -381,6 +390,7 @@ CONSUMABLES: tuple[ShopItem, ...] = (
     RAID_POTION,
     ENERGY_DRINK,
     DUEL_SCROLL,
+    JAIL_KEY,
     CHIA_SEEDS,
     ALCHEMY_SCRAP,
 )

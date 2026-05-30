@@ -455,6 +455,29 @@ class Database:
         await self._migrate_territory_integration()
         await self._migrate_personal_bank()
         await self._migrate_bank_heist()
+        await self._migrate_arrest_tier()
+
+    async def _migrate_arrest_tier(self) -> None:
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'users' AND column_name = 'arrest_tier'
+                """,
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN arrest_tier TEXT NOT NULL DEFAULT ''",
+                )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if "arrest_tier" not in existing:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN arrest_tier TEXT NOT NULL DEFAULT ''",
+                )
+        await self.conn.commit()
 
     async def _migrate_bank_heist(self) -> None:
         if self.is_postgres:
@@ -2828,18 +2851,59 @@ class Database:
             )
             await self.conn.commit()
 
-    async def set_arrested_until(self, user_id: int, guild_id: int, timestamp: float) -> None:
+    async def set_arrested_until(
+        self,
+        user_id: int,
+        guild_id: int,
+        timestamp: float,
+        *,
+        arrest_tier: str | None = None,
+    ) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            if arrest_tier is not None:
+                await self.conn.execute(
+                    """
+                    UPDATE users
+                    SET arrested_until = ?, arrest_tier = ?
+                    WHERE user_id = ? AND guild_id = ?
+                    """,
+                    (timestamp, arrest_tier, user_id, guild_id),
+                )
+            else:
+                await self.conn.execute(
+                    """
+                    UPDATE users
+                    SET arrested_until = ?
+                    WHERE user_id = ? AND guild_id = ?
+                    """,
+                    (timestamp, user_id, guild_id),
+                )
+            await self.conn.commit()
+
+    async def clear_arrest(self, user_id: int, guild_id: int) -> None:
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
             await self.conn.execute(
                 """
                 UPDATE users
-                SET arrested_until = ?
+                SET arrested_until = 0, arrest_tier = ''
                 WHERE user_id = ? AND guild_id = ?
                 """,
-                (timestamp, user_id, guild_id),
+                (user_id, guild_id),
             )
             await self.conn.commit()
+
+    async def get_arrest_tier(self, user_id: int, guild_id: int) -> str | None:
+        row = await self.get_user(user_id, guild_id)
+        try:
+            raw = row["arrest_tier"]
+        except (KeyError, TypeError):
+            return None
+        if raw is None:
+            return None
+        tier = str(raw).strip()
+        return tier or None
 
     async def set_downed_until(self, user_id: int, guild_id: int, timestamp: float) -> None:
         async with self._write_lock:
