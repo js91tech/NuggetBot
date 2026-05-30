@@ -195,6 +195,8 @@ class Duels(commands.Cog):
     ) -> None:
         attacker_equipment = await self.bot.db.get_equipment(attacker.id, guild_id)
         defender_equipment = await self.bot.db.get_equipment(opponent.id, guild_id)
+        attacker_unstable = await self.bot.db.list_unstable_slots(attacker.id, guild_id)
+        defender_unstable = await self.bot.db.list_unstable_slots(opponent.id, guild_id)
         attacker_progress = await self.bot.db.get_user_progress(attacker.id, guild_id)
         defender_progress = await self.bot.db.get_user_progress(opponent.id, guild_id)
         await self.bot.db.ensure_jester_class(attacker.id, guild_id)
@@ -221,6 +223,7 @@ class Duels(commands.Cog):
             class_id=attacker_class,
             aspect_bonuses=attacker_bonuses,
             trap_bomb_count=attacker_bombs,
+            unstable_slots=attacker_unstable,
         )
         defender_fighter = fighter_from_equipment(
             opponent.id,
@@ -230,6 +233,7 @@ class Duels(commands.Cog):
             class_id=defender_class,
             aspect_bonuses=defender_bonuses,
             trap_bomb_count=defender_bombs,
+            unstable_slots=defender_unstable,
         )
         if await self.bot.db.take_pending_consumable(
             attacker.id, guild_id, "duel_scroll",

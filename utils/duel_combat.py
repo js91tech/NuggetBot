@@ -74,10 +74,11 @@ def fighter_from_equipment(
     aspect_instance: AspectInstance | None = None,
     aspect_bonuses: AspectBonuses | None = None,
     trap_bomb_count: int = 0,
+    unstable_slots: set[str] | None = None,
 ) -> DuelFighter:
     from utils.classes import get_modifiers
 
-    loadout = parse_loadout(equipment)
+    loadout = parse_loadout(equipment, unstable_slots=unstable_slots)
     set_bonus = detect_set_bonus(loadout.primary, loadout.armor)
     mods = class_modifiers if class_modifiers is not None else get_modifiers(class_id)
     ab = aspect_bonuses

@@ -15,10 +15,18 @@ class PlayerLoadout:
     armor: ShopItem | None
 
 
-def parse_loadout(equipment: dict[str, str]) -> PlayerLoadout:
-    weapon_slot = get_item(equipment["weapon"]) if equipment.get("weapon") else None
-    off_slot = get_item(equipment["off_hand"]) if equipment.get("off_hand") else None
-    armor = get_item(equipment["armor"]) if equipment.get("armor") else None
+def parse_loadout(
+    equipment: dict[str, str],
+    *,
+    unstable_slots: set[str] | None = None,
+) -> PlayerLoadout:
+    unstable = unstable_slots or set()
+    weapon_id = equipment.get("weapon") if "weapon" not in unstable else None
+    off_id = equipment.get("off_hand") if "off_hand" not in unstable else None
+    armor_id = equipment.get("armor") if "armor" not in unstable else None
+    weapon_slot = get_item(weapon_id) if weapon_id else None
+    off_slot = get_item(off_id) if off_id else None
+    armor = get_item(armor_id) if armor_id else None
     primary, off_hand = resolve_primary_off_hand(weapon_slot, off_slot)
     return PlayerLoadout(primary=primary, off_hand=off_hand, armor=armor)
 

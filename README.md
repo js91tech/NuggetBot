@@ -56,7 +56,7 @@ python bot.py
 |---------|-------------|
 | `/daily` | Claim 75 nuggets daily |
 | `/balance` | Pocket + bank panel with deposit/withdraw buttons |
-| `/deposit amount` | Move nuggets pocket → bank (safe from heists) |
+| `/deposit amount` | Move nuggets pocket → bank (safer than pocket, but `/bank-heist` targets bank) |
 | `/withdraw amount` | Move nuggets bank → pocket |
 | `/leaderboard` | Top 10 by net worth (pocket + bank) |
 | `/pay @user amount` | Send nuggets from your pocket to another user |
@@ -72,9 +72,22 @@ python bot.py
 
 | Command | Description |
 |---------|-------------|
-| `/heist @user [@crew1] [@crew2]` | Attempt a robbery |
-| `/arrest @thief` | Arrest a failed thief during the arrest window |
-| `/crew` | Crew info |
+| `/heist @user [@crew1] [@crew2]` | Rob a user's **pocket** (wallet) |
+| `/bank-heist @user` | High-risk vault robbery — tier panel steals from **bank** |
+| `/arrest @thief` | Arrest a failed wallet heist thief (5-minute window) |
+| `/fix` | Repair unstable gear after a failed Tier 3 bank heist |
+
+**Bank heist tiers**
+
+| Tier | Success | Loot | Fail jail | Extra penalty |
+|------|---------|------|-----------|---------------|
+| 1 | 10% | 10% of bank | 120 min | — |
+| 2 | 8% | 20% of bank | 4 hours | — |
+| 3 | 5% | 35% of bank | 12 hours | 60% chance one equipped item becomes **unstable** |
+
+Unstable gear gives **no stat bonuses** until repaired for **80%** of the item's shop price (`/fix`).
+
+| `/crew` | Interactive crew panel |
 
 ### Hacker
 
@@ -137,7 +150,7 @@ Five zones per server (**Docks** → **Citadel**). Crews hold zones for **hourly
 
 | `/territory` action | What it does |
 |---------------------|--------------|
-| **Map / status** | Who holds each zone, guards, active sieges |
+| **Map / status** | Interactive territory map — hire guards on held zones (+1/+5 wallet or treasury) |
 | **Attack / claim** | Claim neutral zones instantly; contested zones enter a **30 min** siege |
 | **Buy guards** | Spend nuggets to add defenders (improves hold chance when sieged) |
 | **Abandon** | Release a zone your crew holds |

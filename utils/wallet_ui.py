@@ -25,7 +25,7 @@ def build_wallet_embed(
     embed.add_field(name="Pocket", value=fmt_amount(wallet), inline=True)
     embed.add_field(name="Bank", value=fmt_amount(bank), inline=True)
     embed.add_field(name="Net worth", value=fmt_amount(net), inline=True)
-    embed.set_footer(text="Bank is safe from heists · Pocket is spendable & stealable")
+    embed.set_footer(text="Bank can be hit by /bank-heist · Pocket is spendable & stealable")
     return embed
 
 

@@ -287,6 +287,7 @@ class Database:
                 bank REAL NOT NULL DEFAULT 0 CHECK (bank >= 0),
                 last_daily REAL NOT NULL DEFAULT 0,
                 last_heist REAL NOT NULL DEFAULT 0,
+                last_bank_heist REAL NOT NULL DEFAULT 0,
                 last_active_ts REAL NOT NULL DEFAULT 0,
                 arrested_until REAL NOT NULL DEFAULT 0,
                 downed_until REAL NOT NULL DEFAULT 0,
@@ -453,6 +454,39 @@ class Database:
         await self._migrate_territories()
         await self._migrate_territory_integration()
         await self._migrate_personal_bank()
+        await self._migrate_bank_heist()
+
+    async def _migrate_bank_heist(self) -> None:
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'users' AND column_name = 'last_bank_heist'
+                """,
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN last_bank_heist REAL NOT NULL DEFAULT 0",
+                )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if "last_bank_heist" not in existing:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN last_bank_heist REAL NOT NULL DEFAULT 0",
+                )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS equipment_unstable (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                slot TEXT NOT NULL CHECK (slot IN ('weapon', 'off_hand', 'armor')),
+                PRIMARY KEY (guild_id, user_id, slot)
+            )
+            """,
+        )
+        await self.conn.commit()
 
     async def _migrate_personal_bank(self) -> None:
         if self.is_postgres:
@@ -2261,6 +2295,13 @@ class Database:
         )
         return {str(row["slot"]): str(row["item_id"]) for row in await cursor.fetchall()}
 
+    async def get_combat_loadout(self, user_id: int, guild_id: int):
+        from utils.loadout import parse_loadout
+
+        equipment = await self.get_equipment(user_id, guild_id)
+        unstable = await self.list_unstable_slots(user_id, guild_id)
+        return parse_loadout(equipment, unstable_slots=unstable)
+
     async def sync_combat_hp(self, user_id: int, guild_id: int, max_hp: float) -> aiosqlite.Row:
         async with self._write_lock:
             await self.conn.execute("BEGIN IMMEDIATE")
@@ -2472,6 +2513,169 @@ class Database:
             await self.conn.commit()
             return removed
 
+    async def remove_up_to_bank(self, user_id: int, guild_id: int, amount: float) -> float:
+        if amount <= 0:
+            return 0.0
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT bank FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            bank = float(row["bank"]) if row is not None else 0.0
+            removed = min(bank, amount)
+            if removed:
+                await self.conn.execute(
+                    """
+                    UPDATE users
+                    SET bank = bank - ?, wallet = wallet + ?
+                    WHERE user_id = ? AND guild_id = ?
+                    """,
+                    (removed, removed, user_id, guild_id),
+                )
+            await self.conn.commit()
+            return removed
+
+    async def steal_from_bank(
+        self,
+        target_id: int,
+        thief_id: int,
+        guild_id: int,
+        amount: float,
+    ) -> float:
+        """Remove up to amount from target bank and credit thief wallet."""
+        if amount <= 0 or target_id == thief_id:
+            return 0.0
+        async with self._write_lock:
+            await self._ensure_user_no_lock(target_id, guild_id)
+            await self._ensure_user_no_lock(thief_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT bank FROM users WHERE user_id = ? AND guild_id = ?",
+                (target_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            bank = float(row["bank"]) if row is not None else 0.0
+            stolen = min(bank, amount)
+            if stolen <= 0:
+                await self.conn.commit()
+                return 0.0
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET bank = bank - ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (stolen, target_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (stolen, thief_id, guild_id),
+            )
+            await self.conn.commit()
+            return stolen
+
+    async def list_unstable_slots(self, user_id: int, guild_id: int) -> set[str]:
+        cursor = await self.conn.execute(
+            """
+            SELECT slot FROM equipment_unstable
+            WHERE guild_id = ? AND user_id = ?
+            """,
+            (guild_id, user_id),
+        )
+        return {str(row["slot"]) for row in await cursor.fetchall()}
+
+    async def mark_slot_unstable(self, user_id: int, guild_id: int, slot: str) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                INSERT INTO equipment_unstable (guild_id, user_id, slot)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, user_id, slot) DO NOTHING
+                """,
+                (guild_id, user_id, slot),
+            )
+            await self.conn.commit()
+
+    async def mark_random_equipped_unstable(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        chance: float,
+    ) -> str | None:
+        import random
+
+        if random.random() >= chance:
+            return None
+        equipment = await self.get_equipment(user_id, guild_id)
+        slots = [slot for slot in ("weapon", "off_hand", "armor") if equipment.get(slot)]
+        if not slots:
+            return None
+        slot = random.choice(slots)
+        await self.mark_slot_unstable(user_id, guild_id, slot)
+        return slot
+
+    async def clear_slot_unstable(self, user_id: int, guild_id: int, slot: str) -> None:
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                DELETE FROM equipment_unstable
+                WHERE guild_id = ? AND user_id = ? AND slot = ?
+                """,
+                (guild_id, user_id, slot),
+            )
+            await self.conn.commit()
+
+    async def fix_unstable_slot(self, user_id: int, guild_id: int, slot: str) -> str | None:
+        from items import get_item
+        import config
+
+        unstable = await self.list_unstable_slots(user_id, guild_id)
+        if slot not in unstable:
+            return "not_unstable"
+        equipment = await self.get_equipment(user_id, guild_id)
+        item_id = equipment.get(slot)
+        if not item_id:
+            await self.clear_slot_unstable(user_id, guild_id, slot)
+            return None
+        item = get_item(item_id)
+        if item is None:
+            await self.clear_slot_unstable(user_id, guild_id, slot)
+            return None
+        base_id = item_id.removeprefix("boss_weak_") if item_id.startswith("boss_weak_") else item_id
+        base = get_item(base_id)
+        price = float(base.price if base is not None else item.price)
+        cost = max(1.0, price * config.GEAR_FIX_COST_FRACTION)
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None or float(row["wallet"]) < cost:
+                await self.conn.commit()
+                return "insufficient_funds"
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (cost, user_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                DELETE FROM equipment_unstable
+                WHERE guild_id = ? AND user_id = ? AND slot = ?
+                """,
+                (guild_id, user_id, slot),
+            )
+            await self.conn.commit()
+        return None
+
     async def transfer_wallet(
         self,
         payer_id: int,
@@ -2592,6 +2796,19 @@ class Database:
                 """
                 UPDATE users
                 SET last_heist = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (timestamp, user_id, guild_id),
+            )
+            await self.conn.commit()
+
+    async def set_last_bank_heist(self, user_id: int, guild_id: int, timestamp: float) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET last_bank_heist = ?
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (timestamp, user_id, guild_id),

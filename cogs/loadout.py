@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from items import ShopItem, get_item, is_damage_dealer
+from utils.fix_gear_ui import send_fix_panel
 from utils.helpers import fmt_amount, guild_only_message
 from utils.loadout import parse_loadout
 
@@ -174,6 +175,17 @@ class Loadout(commands.Cog):
             f"Sold **{sold}** battle-worn item(s) for **{fmt_amount(payout)}**.",
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="fix",
+        description="Repair unstable gear (80% of shop price) to restore stat bonuses.",
+    )
+    @app_commands.guild_only()
+    async def fix(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        await send_fix_panel(interaction, self)
 
 
 async def setup(bot: commands.Bot) -> None:

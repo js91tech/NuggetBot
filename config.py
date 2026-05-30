@@ -71,6 +71,15 @@ HEIST_COOLDOWN_SECONDS = 30 * 60
 HEIST_ARREST_WINDOW_SECONDS = 5 * 60
 HEIST_ARREST_SECONDS = 60 * 60
 
+# Bank heist — high risk, steals from personal bank (not wallet heists).
+BANK_HEIST_COOLDOWN_SECONDS = 60 * 60
+BANK_HEIST_TIERS: dict[int, dict[str, float]] = {
+    1: {"success": 0.10, "loot_fraction": 0.10, "jail_seconds": 120 * 60},
+    2: {"success": 0.08, "loot_fraction": 0.20, "jail_seconds": 4 * 60 * 60},
+    3: {"success": 0.05, "loot_fraction": 0.35, "jail_seconds": 12 * 60 * 60, "unstable_chance": 0.60},
+}
+GEAR_FIX_COST_FRACTION = 0.80
+
 HACK_VIRUS_NAME = "hannah hentai hanta virus"
 HACK_BASE_PENALTY = 15.0
 HACK_PASS_PENALTY = 2.0

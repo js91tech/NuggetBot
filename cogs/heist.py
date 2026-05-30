@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import time
+from dataclasses import dataclass
 
 import discord
 from discord import app_commands
@@ -9,10 +10,18 @@ from discord.ext import commands
 
 import config
 from utils.achievements import evaluate_unlocks, format_unlock_message
+from utils.bank_heist_ui import send_bank_heist_panel
 from utils.crew_banking import heist_same_crew_bonus
 from utils.gear_sets import heist_intimidation_bonus
 from utils.helpers import fmt_amount, guild_only_message
-from utils.loadout import parse_loadout
+from items import get_item
+
+
+@dataclass
+class BankHeistResult:
+    embed: discord.Embed | None = None
+    message: str | None = None
+    error: str | None = None
 
 
 class Heist(commands.Cog):
@@ -79,8 +88,7 @@ class Heist(commands.Cog):
 
         await self.bot.db.set_last_heist(interaction.user.id, interaction.guild_id, current)
         base_success = await self.bot.db.get_config_value(interaction.guild_id, "heist_base_success")
-        equipment = await self.bot.db.get_equipment(interaction.user.id, interaction.guild_id)
-        loadout = parse_loadout(equipment)
+        loadout = await self.bot.db.get_combat_loadout(interaction.user.id, interaction.guild_id)
         intimidation = heist_intimidation_bonus(loadout.primary, off_hand=loadout.off_hand)
         from utils.classes import get_modifiers
 
@@ -160,6 +168,99 @@ class Heist(commands.Cog):
         unlock_msg = format_unlock_message(unlocked)
         if unlock_msg:
             await interaction.followup.send(unlock_msg, ephemeral=True)
+
+    async def execute_bank_heist(
+        self,
+        thief: discord.Member,
+        target: discord.Member,
+        guild: discord.Guild,
+        *,
+        tier: int,
+    ) -> BankHeistResult:
+        spec = config.BANK_HEIST_TIERS.get(tier)
+        if spec is None:
+            return BankHeistResult(error="Invalid heist tier.")
+
+        guild_id = guild.id
+        current = time.time()
+        if await self.bot.db.is_restricted(thief.id, guild_id, current):
+            return BankHeistResult(error="You cannot run a bank heist right now.")
+
+        target_bank = await self.bot.db.get_bank(target.id, guild_id)
+        if target_bank <= 0:
+            return BankHeistResult(error=f"{target.display_name} has nothing in their bank.")
+
+        thief_row = await self.bot.db.get_user(thief.id, guild_id)
+        cooldown_left = (
+            float(thief_row["last_bank_heist"]) + config.BANK_HEIST_COOLDOWN_SECONDS - current
+        )
+        if cooldown_left > 0:
+            return BankHeistResult(
+                error=f"Cooldown — try again in **{int(cooldown_left // 60) + 1}** minutes.",
+            )
+
+        await self.bot.db.set_last_bank_heist(thief.id, guild_id, current)
+        success_chance = float(spec["success"])
+        if random.random() > success_chance:
+            jail_seconds = float(spec["jail_seconds"])
+            await self.bot.db.set_arrested_until(thief.id, guild_id, current + jail_seconds)
+            unstable_note = ""
+            if tier == 3:
+                slot = await self.bot.db.mark_random_equipped_unstable(
+                    thief.id,
+                    guild_id,
+                    chance=float(spec.get("unstable_chance", 0)),
+                )
+                if slot is not None:
+                    equipment = await self.bot.db.get_equipment(thief.id, guild_id)
+                    item_id = equipment.get(slot)
+                    item = get_item(item_id) if item_id else None
+                    name = item.name if item is not None else slot
+                    unstable_note = f"\nYour **{name}** ({slot}) is **unstable** — use `/fix`."
+            hours = jail_seconds / 3600
+            jail_label = f"{int(hours)}h" if hours >= 1 else f"{int(jail_seconds // 60)}m"
+            embed = discord.Embed(
+                title="Bank heist failed!",
+                description=(
+                    f"Security caught **{thief.display_name}** targeting **{target.display_name}**'s vault.\n"
+                    f"Jail time: **{jail_label}**.{unstable_note}"
+                ),
+                color=discord.Color.red(),
+            )
+            return BankHeistResult(embed=embed)
+
+        loot_amount = target_bank * float(spec["loot_fraction"])
+        stolen = await self.bot.db.steal_from_bank(
+            target.id,
+            thief.id,
+            guild_id,
+            loot_amount,
+        )
+        embed = discord.Embed(
+            title="Bank heist success!",
+            description=(
+                f"**{thief.display_name}** drained **{fmt_amount(stolen)}** "
+                f"from **{target.display_name}**'s bank (Tier {tier})."
+            ),
+            color=discord.Color.gold(),
+        )
+        return BankHeistResult(embed=embed)
+
+    @app_commands.command(
+        name="bank-heist",
+        description="High-risk bank vault robbery — pick tier after choosing a target.",
+    )
+    @app_commands.describe(target="Whose bank vault to hit")
+    @app_commands.guild_only()
+    async def bank_heist(
+        self,
+        interaction: discord.Interaction,
+        target: discord.Member,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        await send_bank_heist_panel(interaction, self, target)
 
     @app_commands.command(name="arrest", description="Arrest a thief after a failed heist.")
     @app_commands.describe(thief="The failed thief")

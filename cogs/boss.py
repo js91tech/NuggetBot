@@ -492,8 +492,7 @@ class Boss(commands.Cog):
                     await interaction.followup.send(unlock_msg, ephemeral=True)
 
     async def _loadout(self, user_id: int, guild_id: int) -> PlayerLoadout:
-        equipment = await self.bot.db.get_equipment(user_id, guild_id)
-        return parse_loadout(equipment)
+        return await self.bot.db.get_combat_loadout(user_id, guild_id)
 
     async def _max_hp(self, user_id: int, guild_id: int) -> float:
         from utils.classes import get_modifiers

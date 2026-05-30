@@ -18,8 +18,7 @@ class Dungeon(commands.Cog):
         self.bot = bot
 
     async def _player_max_hp(self, user_id: int, guild_id: int) -> float:
-        equipment = await self.bot.db.get_equipment(user_id, guild_id)
-        loadout = parse_loadout(equipment)
+        loadout = await self.bot.db.get_combat_loadout(user_id, guild_id)
         hp = float(config.PLAYER_BASE_HP)
         if loadout.armor:
             hp += float(loadout.armor.hp_bonus)
@@ -123,8 +122,7 @@ class Dungeon(commands.Cog):
                     "Start a run first.", ephemeral=True,
                 )
                 return
-            equipment = await self.bot.db.get_equipment(uid, guild_id)
-            loadout = parse_loadout(equipment)
+            loadout = await self.bot.db.get_combat_loadout(uid, guild_id)
             progress = await self.bot.db.get_user_progress(uid, guild_id)
             ctx = AttackContext(prestige_level=int(progress["prestige_level"]))
             damage, critical, verb = roll_player_damage(
@@ -312,8 +310,7 @@ class Dungeon(commands.Cog):
                     "You are downed and cannot fight.", ephemeral=True,
                 )
                 return
-            equipment = await self.bot.db.get_equipment(uid, guild_id)
-            loadout = parse_loadout(equipment)
+            loadout = await self.bot.db.get_combat_loadout(uid, guild_id)
             progress = await self.bot.db.get_user_progress(uid, guild_id)
             ctx = AttackContext(prestige_level=int(progress["prestige_level"]))
             damage, critical, verb = roll_player_damage(

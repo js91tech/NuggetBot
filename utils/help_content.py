@@ -17,17 +17,17 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
         "PvP & casino",
         "**/duel** · **/coinflip** · **/blackjack** · **/slots** · **/jackpot**\n"
         "**/crew** — interactive crew panel (join, deposit, withdraw, loans, repay)\n"
-        "**/territory** — 5 zones, hourly crew income, guards, sieges; zone perks (shop/craft/heist)",
+        "**/territory** — map panel with guard hiring, zones, sieges\n"
     ),
     (
         "Character",
         "**/class** · **/cast** · **/mana** · **/aspects** · **/avatar** (upload custom)\n"
         "**/use** — raid potion, energy drink, duel scroll · **/gift** — chia seeds to friends",
-        "**/profile** · **/stats** · **/quests** · **/achievements**",
+        "**/profile** · **/stats** · **/quests** · **/achievements** · **/fix** (unstable gear)",
     ),
     (
         "Chaos modules",
-        "**/bounty** · **/bounty-board** · **/heist** · **/hack** · **/trivia**\n"
+        "**/bounty** · **/bounty-board** · **/heist** · **/bank-heist** · **/hack** · **/trivia**\n"
         "**/hall-of-fame** · **/event** (admins)",
     ),
 )

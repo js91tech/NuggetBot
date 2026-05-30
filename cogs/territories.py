@@ -11,7 +11,7 @@ from discord.ext import commands, tasks
 import config
 from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.helpers import fmt_amount, guild_only_message, resolve_main_channel, send_error
-from utils.quests import record_quest_event
+from utils.territory_ui import send_territory_map_panel
 from utils.territories import (
     TERRITORY_MAP,
     guard_cost_per_unit,
@@ -259,7 +259,7 @@ class Territories(commands.Cog):
         uid = interaction.user.id
 
         if action == "map":
-            await self._send_map(interaction, guild_id, uid)
+            await send_territory_map_panel(interaction, self)
             return
 
         if not zone:

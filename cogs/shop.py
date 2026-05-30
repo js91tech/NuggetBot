@@ -307,8 +307,9 @@ class Shop(commands.Cog):
             return
         target = user or interaction.user
         guild_id = interaction.guild_id
-        equipment = await self.bot.db.get_equipment(target.id, guild_id)
-        loadout = parse_loadout(equipment)
+        loadout = await self.bot.db.get_combat_loadout(target.id, guild_id)
+        unstable = await self.bot.db.list_unstable_slots(target.id, guild_id)
+        raw_equipment = await self.bot.db.get_equipment(target.id, guild_id)
 
         max_hp = float(
             config.PLAYER_BASE_HP + (loadout.armor.hp_bonus if loadout.armor is not None else 0)
@@ -374,12 +375,20 @@ class Shop(commands.Cog):
             ),
             inline=True,
         )
+        def _gear_label(slot: str, item_id: str | None, equipped_name: str | None) -> str:
+            if item_id and slot in unstable:
+                from items import get_item
+                item = get_item(item_id)
+                name = item.name if item is not None else item_id
+                return f"**{name}** ⚠️ _unstable — no stats_"
+            return f"**{equipped_name or 'None'}**"
+
         embed.add_field(
             name="Gear",
             value=(
-                f"Main: **{loadout.primary.name if loadout.primary else 'None'}**\n"
-                f"Off-hand: **{loadout.off_hand.name if loadout.off_hand else 'None'}**\n"
-                f"Armor: **{loadout.armor.name if loadout.armor else 'None'}**"
+                f"Main: {_gear_label('weapon', raw_equipment.get('weapon'), loadout.primary.name if loadout.primary else None)}\n"
+                f"Off-hand: {_gear_label('off_hand', raw_equipment.get('off_hand'), loadout.off_hand.name if loadout.off_hand else None)}\n"
+                f"Armor: {_gear_label('armor', raw_equipment.get('armor'), loadout.armor.name if loadout.armor else None)}"
             ),
             inline=True,
         )
@@ -395,7 +404,9 @@ class Shop(commands.Cog):
         if float(user_row["downed_until"]) > now:
             status_parts.append("Downed (cannot attack)")
         if float(user_row["arrested_until"]) > now:
-            status_parts.append("Arrested")
+            status_parts.append("Arrested / jailed")
+        if unstable:
+            status_parts.append(f"Unstable gear ({len(unstable)} slot(s)) — /fix")
         if status_parts:
             embed.add_field(name="Status", value=" · ".join(status_parts), inline=False)
 
@@ -431,7 +442,8 @@ class Shop(commands.Cog):
                 for row in rows
             )
 
-        loadout = parse_loadout(equipment)
+        loadout = await self.bot.db.get_combat_loadout(target.id, interaction.guild_id)
+        unstable = await self.bot.db.list_unstable_slots(target.id, interaction.guild_id)
         progress = await self.bot.db.get_user_progress(target.id, interaction.guild_id)
         set_bonus = detect_set_bonus(loadout.primary, loadout.armor)
         summary = format_combat_stats_block(
