@@ -246,18 +246,32 @@ class Economy(commands.Cog):
         target = user or interaction.user
         wallet = await self.bot.db.get_balance(target.id, interaction.guild_id)
         bank = await self.bot.db.get_bank(target.id, interaction.guild_id)
+        capacity = await self.bot.db.get_bank_capacity(target.id, interaction.guild_id)
+        tokens = await self.bot.db.get_bank_storage_tokens(target.id, interaction.guild_id)
 
         if target.id == interaction.user.id:
             from utils.wallet_ui import WalletView, build_wallet_embed
 
             view = WalletView(self, interaction.guild_id, target.id)
-            embed = build_wallet_embed(target, wallet=wallet, bank=bank)
+            embed = build_wallet_embed(
+                target,
+                wallet=wallet,
+                bank=bank,
+                capacity=capacity,
+                storage_tokens=tokens,
+            )
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
             return
 
         from utils.wallet_ui import build_wallet_embed
 
-        embed = build_wallet_embed(target, wallet=wallet, bank=bank)
+        embed = build_wallet_embed(
+            target,
+            wallet=wallet,
+            bank=bank,
+            capacity=capacity,
+            storage_tokens=tokens,
+        )
         await interaction.response.send_message(
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -277,20 +291,31 @@ class Economy(commands.Cog):
         if not valid_amount(amount):
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
             return
-        ok = await self.bot.db.deposit_to_bank(
+        moved = await self.bot.db.deposit_to_bank(
             interaction.user.id,
             interaction.guild_id,
             amount,
         )
-        if not ok:
-            await interaction.response.send_message(
-                "You do not have enough nuggets in your pocket.", ephemeral=True
+        if moved <= 0:
+            room = await self.bot.db.get_bank_deposit_room(
+                interaction.user.id, interaction.guild_id,
             )
+            if room <= 0:
+                await interaction.response.send_message(
+                    "Your bank vault is full (**50k** base). "
+                    f"Upgrade storage in `/balance` (+{fmt_amount(config.BANK_STORAGE_PER_TOKEN)} "
+                    f"for {fmt_amount(config.BANK_STORAGE_TOKEN_COST)}).",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "You do not have enough nuggets in your pocket.", ephemeral=True,
+                )
             return
-        await interaction.response.send_message(
-            f"Deposited **{fmt_amount(amount)}** into your bank.",
-            ephemeral=True,
-        )
+        msg = f"Deposited **{fmt_amount(moved)}** into your bank."
+        if moved < amount:
+            msg += " Vault cap reached — buy storage tokens in `/balance` for more room."
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @app_commands.command(name="withdraw", description="Move nuggets from bank to pocket.")
     @app_commands.describe(amount="Amount to withdraw")

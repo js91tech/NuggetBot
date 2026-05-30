@@ -8,6 +8,7 @@ from discord.ext import commands
 
 import config
 from utils.combat_engine import AttackContext, roll_player_damage
+from utils.dungeon_ui import send_dungeon_panel
 from utils.helpers import fmt_amount, guild_only_message
 from utils.loadout import parse_loadout
 from utils.quests import record_quest_event
@@ -26,10 +27,10 @@ class Dungeon(commands.Cog):
 
     @app_commands.command(
         name="dungeon",
-        description="Solo or party dungeon — 5 rooms, loot and alchemy scrap at the end.",
+        description="Open dungeon panel or run an action.",
     )
     @app_commands.describe(
-        action="What to do",
+        action="What to do (omit to open panel)",
         leader="Party leader (for join)",
     )
     @app_commands.choices(
@@ -49,11 +50,14 @@ class Dungeon(commands.Cog):
     async def dungeon(
         self,
         interaction: discord.Interaction,
-        action: str,
+        action: str | None = None,
         leader: discord.Member | None = None,
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if action is None:
+            await send_dungeon_panel(interaction, self)
             return
         guild_id = interaction.guild_id
         uid = interaction.user.id

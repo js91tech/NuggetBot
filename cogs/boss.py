@@ -21,6 +21,7 @@ from items import (
     MYTHIC_RAID_MAIL,
     ShopItem,
     armor_mitigation_percent,
+    get_item,
 )
 from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.aspects import (
@@ -50,7 +51,8 @@ from utils.summoner_penalty import (
     summoner_defense_retention,
     summoner_penalty_summary,
 )
-from utils.boss_ui import BossAttackResult, BossFightView, send_boss_fight_panel
+from utils.mana import mana_bar
+from utils.boss_ui import BossAttackResult, build_boss_fight_view, send_boss_fight_panel
 
 BOSS_NAME = "Hannah"
 BOSS_NAME_TOMASS = config.BOSS_NAME_TOMASS
@@ -782,7 +784,84 @@ class Boss(commands.Cog):
                 value=fmt_amount(your_damage) if your_damage > 0 else "_None yet_",
                 inline=True,
             )
-        embed.set_footer(text="⚔️ Attack · Refresh · Raid LB · /cast and /heal supported")
+            snap = await self.bot.db.get_mana_snapshot(member.id, guild_id)
+            pending_spell = await self.bot.db.get_pending_spell_id(member.id, guild_id)
+            pending_consumable = await self.bot.db.get_pending_consumable_id(member.id, guild_id)
+            status_lines = [
+                f"`{mana_bar(snap.current, snap.cap)}` **{snap.current}/{snap.cap}**",
+            ]
+            if pending_spell:
+                skill = get_skill(pending_spell)
+                label = skill.name if skill else pending_spell
+                if skill and skill.effect == "heal_ally":
+                    status_lines.append(f"⚠️ **{label}** — use **Heal ally**, not Attack")
+                else:
+                    status_lines.append(f"Ready: **{label}** on next attack")
+            if pending_consumable:
+                item = get_item(pending_consumable)
+                name = item.name if item else pending_consumable
+                status_lines.append(f"Item: **{name}** on next attack")
+            embed.add_field(
+                name="Your mana & buffs",
+                value="\n".join(status_lines),
+                inline=False,
+            )
+        embed.set_footer(text="⚔️ Attack · Cast skill · Use item · Heal ally · Refresh")
+        return embed, None
+
+    async def execute_boss_heal(
+        self,
+        healer: discord.Member,
+        target: discord.Member,
+        guild_id: int,
+    ) -> tuple[discord.Embed | None, str | None]:
+        if target.bot and not config.ALLOW_BOT_PLAYERS:
+            return None, "Bots do not need healing."
+        if not await self.bot.db.is_downed(target.id, guild_id):
+            return None, "That user is not downed."
+
+        await self.bot.db.set_downed_until(target.id, guild_id, 0)
+        await self.bot.db.restore_player_hp(
+            target.id,
+            guild_id,
+            await self._max_hp(target.id, guild_id),
+        )
+        await self.bot.db.record_heal(guild_id, healer.id, target.id)
+        await self.bot.db.increment_progress(
+            healer.id,
+            guild_id,
+            heals_given=1,
+        )
+        self_heal = target.id == healer.id
+        heal_reward = config.HEALER_SELF_REWARD if self_heal else config.HEALER_ALLY_REWARD
+        bless_id = await self.bot.db.consume_pending_spell(healer.id, guild_id)
+        if bless_id:
+            bless = get_skill(bless_id)
+            if bless is not None and bless.effect == "heal_ally":
+                heal_reward *= 1.0 + bless.magnitude
+        await self.bot.db.credit_wallet(healer.id, guild_id, heal_reward)
+        await record_quest_event(
+            self.bot.db,
+            guild_id,
+            healer.id,
+            "boss_heal",
+        )
+        if self_heal:
+            description = f"{healer.display_name} got back up."
+            title = "Self revive"
+        else:
+            description = f"{healer.display_name} revived {target.display_name}."
+            title = "Field medic"
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.green(),
+        )
+        embed.add_field(
+            name="Reward",
+            value=f"+{fmt_amount(heal_reward)}",
+            inline=True,
+        )
         return embed, None
 
     async def execute_boss_attack(
@@ -988,7 +1067,7 @@ class Boss(commands.Cog):
             if result.embed is not None and interaction.response.is_done():
                 await interaction.followup.send(embed=result.embed, ephemeral=True)
             return
-        view = BossFightView(self, interaction.guild_id, interaction.user.id)
+        view = await build_boss_fight_view(self, interaction.guild_id, interaction.user.id)
         await interaction.response.send_message(
             embed=result.embed,
             view=view,
@@ -1149,62 +1228,18 @@ class Boss(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        if target.bot and not config.ALLOW_BOT_PLAYERS:
-            await interaction.response.send_message("Bots do not need healing.", ephemeral=True)
-            return
-        if not await self.bot.db.is_downed(target.id, interaction.guild_id):
-            await interaction.response.send_message("That user is not downed.", ephemeral=True)
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Members only.", ephemeral=True)
             return
 
-        await self.bot.db.set_downed_until(target.id, interaction.guild_id, 0)
-        await self.bot.db.restore_player_hp(
-            target.id,
-            interaction.guild_id,
-            await self._max_hp(target.id, interaction.guild_id),
-        )
-        await self.bot.db.record_heal(interaction.guild_id, interaction.user.id, target.id)
-        await self.bot.db.increment_progress(
-            interaction.user.id,
-            interaction.guild_id,
-            heals_given=1,
-        )
-        self_heal = target.id == interaction.user.id
-        heal_reward = config.HEALER_SELF_REWARD if self_heal else config.HEALER_ALLY_REWARD
-        bless_id = await self.bot.db.consume_pending_spell(
-            interaction.user.id,
+        embed, err = await self.execute_boss_heal(
+            interaction.user,
+            target,
             interaction.guild_id,
         )
-        if bless_id:
-            bless = get_skill(bless_id)
-            if bless is not None and bless.effect == "heal_ally":
-                heal_reward *= 1.0 + bless.magnitude
-        await self.bot.db.credit_wallet(
-            interaction.user.id,
-            interaction.guild_id,
-            heal_reward,
-        )
-        await record_quest_event(
-            self.bot.db,
-            interaction.guild_id,
-            interaction.user.id,
-            "boss_heal",
-        )
-        if self_heal:
-            description = f"{interaction.user.mention} got back up."
-            title = "Self revive"
-        else:
-            description = f"{interaction.user.mention} revived {target.mention}."
-            title = "Field medic"
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.green(),
-        )
-        embed.add_field(
-            name="Reward",
-            value=f"+{fmt_amount(heal_reward)}",
-            inline=True,
-        )
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
         await interaction.response.send_message(
             embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
