@@ -369,7 +369,7 @@ class DashboardServer:
                     "leaderboard": [
                         {
                             "name": self._member_name(guild, int(row["user_id"])),
-                            "wallet": float(row["wallet"]),
+                            "wallet": float(row["net"]),
                         }
                         for row in leaderboard
                     ],
@@ -414,7 +414,7 @@ class DashboardServer:
             ]
 
         return {
-            "richest": rows_for("richest", value_key="wallet"),
+            "richest": rows_for("richest", value_key="net"),
             "boss_kills": rows_for("boss_kills", value_key="score"),
             "heals": rows_for("heals", value_key="score"),
             "achievements": rows_for("achievements", value_key="score"),

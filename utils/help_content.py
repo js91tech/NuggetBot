@@ -3,7 +3,7 @@ from __future__ import annotations
 HELP_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Economy",
-        "**/daily** · **/balance** · **/pay** · **/leaderboard**\n"
+        "**/daily** · **/balance** · **/deposit** · **/withdraw** · **/pay** · **/leaderboard**\n"
         "**/jobs** · **/work** · **/energy** · **/upgrade-energy**\n"
         "Passive nuggets from chat, VC, and activity.",
     ),

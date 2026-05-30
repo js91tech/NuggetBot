@@ -149,6 +149,48 @@ class Shop(commands.Cog):
             )
             return
 
+        from utils.shop_view import ShopView
+
+        view = ShopView(
+            self,
+            interaction.guild_id,
+            interaction.user.id,
+            category=category,
+            page=0,
+        )
+        embed, files, view = await view.build_payload()
+        await interaction.response.send_message(
+            embed=embed,
+            files=files,
+            view=view,
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="shop-list",
+        description="Text list of shop items (accessibility fallback).",
+    )
+    @app_commands.describe(category="Item category to view")
+    @app_commands.choices(
+        category=[
+            app_commands.Choice(name="All", value="all"),
+            app_commands.Choice(name="Weapons", value="weapon"),
+            app_commands.Choice(name="Guns", value="gun"),
+            app_commands.Choice(name="Armor", value="armor"),
+            app_commands.Choice(name="Consumables", value="consumable"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def shop_list(self, interaction: discord.Interaction, category: str = "all") -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if category not in SHOP_CATEGORIES:
+            await interaction.response.send_message(
+                "Choose all, weapon, gun, armor, or consumable.", ephemeral=True
+            )
+            return
+
         items = items_for_category(category)
         category_labels = {
             "all": "All",
@@ -306,6 +348,7 @@ class Shop(commands.Cog):
             aspect_blurb = "\n**Aspects** — " + " · ".join(parts)
         user_row = await self.bot.db.get_user(target.id, guild_id)
         wallet = float(user_row["wallet"])
+        bank = float(user_row["bank"])
         total_earned = float(user_row["total_earned"])
         raid_damage = await self.bot.db.get_boss_damage(target.id, guild_id)
 
@@ -325,7 +368,8 @@ class Shop(commands.Cog):
         embed.add_field(
             name="Economy",
             value=(
-                f"Wallet: **{fmt_amount(wallet)}**\n"
+                f"Pocket: **{fmt_amount(wallet)}**\n"
+                f"Bank: **{fmt_amount(bank)}**\n"
                 f"Lifetime earned: **{fmt_amount(total_earned)}**"
             ),
             inline=True,

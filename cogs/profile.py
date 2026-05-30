@@ -32,6 +32,7 @@ class Profile(commands.Cog):
         uid = target.id
 
         wallet = await self.bot.db.get_balance(uid, guild_id)
+        bank = await self.bot.db.get_bank(uid, guild_id)
         user_row = await self.bot.db.get_user(uid, guild_id)
         progress = await self.bot.db.get_user_progress(uid, guild_id)
         rating, elo_wins, elo_losses = await self.bot.db.get_duel_elo(uid, guild_id)
@@ -66,7 +67,13 @@ class Profile(commands.Cog):
             color=discord.Color.teal(),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="Wallet", value=fmt_amount(wallet), inline=True)
+        embed.add_field(name="Pocket", value=fmt_amount(wallet), inline=True)
+        embed.add_field(name="Bank", value=fmt_amount(bank), inline=True)
+        embed.add_field(
+            name="Net worth",
+            value=fmt_amount(wallet + bank),
+            inline=True,
+        )
         embed.add_field(
             name="Prestige",
             value=str(int(progress["prestige_level"])),

@@ -55,9 +55,11 @@ python bot.py
 | Command | Description |
 |---------|-------------|
 | `/daily` | Claim 75 nuggets daily |
-| `/balance` | Check your wallet |
-| `/leaderboard` | Top 10 richest users |
-| `/pay @user amount` | Send nuggets to another user |
+| `/balance` | Pocket + bank panel with deposit/withdraw buttons |
+| `/deposit amount` | Move nuggets pocket → bank (safe from heists) |
+| `/withdraw amount` | Move nuggets bank → pocket |
+| `/leaderboard` | Top 10 by net worth (pocket + bank) |
+| `/pay @user amount` | Send nuggets from your pocket to another user |
 
 ### Bounty
 
@@ -148,7 +150,8 @@ Max **3 zones per crew**. Siege cooldown **12h** per zone after an attack.
 
 | Command | Description |
 |---------|-------------|
-| `/shop [category]` | Browse 10 weapons and 10 armor pieces |
+| `/shop [category]` | Visual item grid with buy buttons (pocket balance) |
+| `/shop-list [category]` | Text catalog fallback |
 | `/buy item_id` | Buy a weapon or armor piece |
 | `/inventory [user]` | View owned and equipped gear |
 | `/equip item_id` | Equip an owned weapon or armor piece |

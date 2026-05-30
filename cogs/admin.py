@@ -262,6 +262,8 @@ class Admin(commands.Cog):
             value=(
                 f"Tracked users: `{int(stats['users'])}`\n"
                 f"Wallet total: `{fmt_amount(float(stats['total_wallet']))}`\n"
+                f"Bank total: `{fmt_amount(float(stats['total_bank']))}`\n"
+                f"Combined wealth: `{fmt_amount(float(stats['total_wealth']))}`\n"
                 f"Lifetime earned: `{fmt_amount(float(stats['total_earned']))}`\n"
                 f"Messages rewarded: `{int(stats['messages_sent'])}`"
             ),

@@ -241,10 +241,81 @@ class Economy(commands.Cog):
             return
 
         target = user or interaction.user
-        balance = await self.bot.db.get_balance(target.id, interaction.guild_id)
+        wallet = await self.bot.db.get_balance(target.id, interaction.guild_id)
+        bank = await self.bot.db.get_bank(target.id, interaction.guild_id)
+
+        if target.id == interaction.user.id:
+            from utils.wallet_ui import WalletView, build_wallet_embed
+
+            view = WalletView(self, interaction.guild_id, target.id)
+            embed = build_wallet_embed(target, wallet=wallet, bank=bank)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            return
+
+        from utils.wallet_ui import build_wallet_embed
+
+        embed = build_wallet_embed(target, wallet=wallet, bank=bank)
         await interaction.response.send_message(
-            f"{target.mention} has {fmt_amount(balance)}.",
+            embed=embed,
             allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @app_commands.command(name="deposit", description="Move nuggets from pocket to bank.")
+    @app_commands.describe(amount="Amount to deposit (omit with Dep all in /balance panel)")
+    @app_commands.guild_only()
+    async def deposit(
+        self,
+        interaction: discord.Interaction,
+        amount: float,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not valid_amount(amount):
+            await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
+            return
+        ok = await self.bot.db.deposit_to_bank(
+            interaction.user.id,
+            interaction.guild_id,
+            amount,
+        )
+        if not ok:
+            await interaction.response.send_message(
+                "You do not have enough nuggets in your pocket.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"Deposited **{fmt_amount(amount)}** into your bank.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="withdraw", description="Move nuggets from bank to pocket.")
+    @app_commands.describe(amount="Amount to withdraw")
+    @app_commands.guild_only()
+    async def withdraw(
+        self,
+        interaction: discord.Interaction,
+        amount: float,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not valid_amount(amount):
+            await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
+            return
+        ok = await self.bot.db.withdraw_from_bank(
+            interaction.user.id,
+            interaction.guild_id,
+            amount,
+        )
+        if not ok:
+            await interaction.response.send_message(
+                "You do not have enough nuggets in your bank.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"Withdrew **{fmt_amount(amount)}** to your pocket.",
+            ephemeral=True,
         )
 
     @app_commands.command(name="leaderboard", description="Show the richest users.")
@@ -263,9 +334,16 @@ class Economy(commands.Cog):
         for index, row in enumerate(rows, start=1):
             member = interaction.guild.get_member(int(row["user_id"]))
             name = member.display_name if member else f"User {row['user_id']}"
-            lines.append(f"**{index}.** {name}: {fmt_amount(float(row['wallet']))}")
+            net = float(row["net"])
+            lines.append(f"**{index}.** {name}: {fmt_amount(net)}")
 
-        await interaction.response.send_message("\n".join(lines))
+        embed = discord.Embed(
+            title="Richest players",
+            description="\n".join(lines),
+            color=discord.Color.gold(),
+        )
+        embed.set_footer(text="Ranked by pocket + bank (net worth)")
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="pay", description="Send nuggets to another user.")
     @app_commands.describe(user="User to pay", amount="Amount to send")

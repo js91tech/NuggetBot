@@ -284,6 +284,7 @@ class Database:
                 user_id BIGINT NOT NULL,
                 guild_id BIGINT NOT NULL,
                 wallet REAL NOT NULL DEFAULT 0 CHECK (wallet >= 0),
+                bank REAL NOT NULL DEFAULT 0 CHECK (bank >= 0),
                 last_daily REAL NOT NULL DEFAULT 0,
                 last_heist REAL NOT NULL DEFAULT 0,
                 last_active_ts REAL NOT NULL DEFAULT 0,
@@ -451,6 +452,29 @@ class Database:
         await self._migrate_crew_banking()
         await self._migrate_territories()
         await self._migrate_territory_integration()
+        await self._migrate_personal_bank()
+
+    async def _migrate_personal_bank(self) -> None:
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'users' AND column_name = 'bank'
+                """,
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN bank REAL NOT NULL DEFAULT 0 CHECK (bank >= 0)",
+                )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if "bank" not in existing:
+                await self.conn.execute(
+                    "ALTER TABLE users ADD COLUMN bank REAL NOT NULL DEFAULT 0 CHECK (bank >= 0)",
+                )
+        await self.conn.commit()
 
     async def _migrate_territory_integration(self) -> None:
         territory_cols = [
@@ -1748,6 +1772,108 @@ class Database:
         row = await self.get_user(user_id, guild_id)
         return float(row["wallet"])
 
+    async def get_bank(self, user_id: int, guild_id: int) -> float:
+        row = await self.get_user(user_id, guild_id)
+        return float(row["bank"])
+
+    async def get_net_worth(self, user_id: int, guild_id: int) -> float:
+        row = await self.get_user(user_id, guild_id)
+        return float(row["wallet"]) + float(row["bank"])
+
+    async def deposit_to_bank(self, user_id: int, guild_id: int, amount: float) -> bool:
+        if amount <= 0:
+            return False
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None or float(row["wallet"]) < amount:
+                await self.conn.commit()
+                return False
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet - ?, bank = bank + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (amount, amount, user_id, guild_id),
+            )
+            await self.conn.commit()
+            return True
+
+    async def withdraw_from_bank(self, user_id: int, guild_id: int, amount: float) -> bool:
+        if amount <= 0:
+            return False
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT bank FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None or float(row["bank"]) < amount:
+                await self.conn.commit()
+                return False
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet + ?, bank = bank - ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (amount, amount, user_id, guild_id),
+            )
+            await self.conn.commit()
+            return True
+
+    async def deposit_all_to_bank(self, user_id: int, guild_id: int) -> float:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            amount = float(row["wallet"]) if row is not None else 0.0
+            if amount <= 0:
+                await self.conn.commit()
+                return 0.0
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = 0, bank = bank + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (amount, user_id, guild_id),
+            )
+            await self.conn.commit()
+            return amount
+
+    async def withdraw_all_from_bank(self, user_id: int, guild_id: int) -> float:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT bank FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            amount = float(row["bank"]) if row is not None else 0.0
+            if amount <= 0:
+                await self.conn.commit()
+                return 0.0
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet + ?, bank = 0
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (amount, user_id, guild_id),
+            )
+            await self.conn.commit()
+            return amount
+
     async def credit_wallet(
         self,
         user_id: int,
@@ -1817,6 +1943,7 @@ class Database:
                 """
                 UPDATE users
                 SET wallet = 0,
+                    bank = 0,
                     last_daily = 0,
                     last_heist = 0,
                     last_active_ts = 0,
@@ -2526,10 +2653,10 @@ class Database:
     async def leaderboard(self, guild_id: int, limit: int = 10) -> list[aiosqlite.Row]:
         cursor = await self.conn.execute(
             """
-            SELECT user_id, wallet
+            SELECT user_id, wallet, bank, (wallet + bank) AS net
             FROM users
             WHERE guild_id = ?
-            ORDER BY wallet DESC, user_id ASC
+            ORDER BY net DESC, user_id ASC
             LIMIT ?
             """,
             (guild_id, limit),
@@ -2538,7 +2665,7 @@ class Database:
 
     async def total_circulation(self, guild_id: int) -> float:
         cursor = await self.conn.execute(
-            "SELECT COALESCE(SUM(wallet), 0) AS total FROM users WHERE guild_id = ?",
+            "SELECT COALESCE(SUM(wallet + bank), 0) AS total FROM users WHERE guild_id = ?",
             (guild_id,),
         )
         row = await cursor.fetchone()
@@ -2550,6 +2677,8 @@ class Database:
             SELECT
                 COUNT(*) AS users,
                 COALESCE(SUM(wallet), 0) AS total_wallet,
+                COALESCE(SUM(bank), 0) AS total_bank,
+                COALESCE(SUM(wallet + bank), 0) AS total_wealth,
                 COALESCE(SUM(total_earned), 0) AS total_earned,
                 COALESCE(SUM(messages_sent), 0) AS messages_sent
             FROM users
@@ -3805,7 +3934,7 @@ class Database:
             await self.conn.execute(
                 """
                 UPDATE users
-                SET wallet = 0
+                SET wallet = 0, bank = 0
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (user_id, guild_id),
