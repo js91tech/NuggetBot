@@ -7,8 +7,8 @@ from discord.ext import commands
 import config
 from utils.energy import energy_snapshot
 from utils.helpers import fmt_amount, guild_only_message
-from utils.jobs import JOBS, get_job, roll_job_payout
-from utils.quests import record_quest_event
+from utils.jobs import JOBS, get_job
+from utils.jobs_ui import execute_job_shift, send_jobs_panel
 
 
 def _energy_bar(current: int, cap: int, *, length: int = 10) -> str:
@@ -52,37 +52,13 @@ class Jobs(commands.Cog):
         )
         return text, snap.current, snap.cap
 
-    @app_commands.command(name="jobs", description="Browse jobs and your energy.")
+    @app_commands.command(name="jobs", description="Open the jobs board panel.")
     @app_commands.guild_only()
     async def jobs(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-
-        energy_text, _, cap = await self._energy_display(interaction.user.id, interaction.guild_id)
-        lines = [
-            f"{job.emoji} **{job.name}** (`{job.job_id}`) — "
-            f"**{job.energy_cost}** energy → "
-            f"**{fmt_amount(job.payout_min)}–{fmt_amount(job.payout_max)}**"
-            for job in JOBS
-        ]
-        embed = discord.Embed(
-            title="Jobs board",
-            description="\n".join(lines),
-            color=discord.Color.teal(),
-        )
-        embed.add_field(name="Your energy", value=energy_text, inline=False)
-        embed.add_field(
-            name="Expand cap",
-            value=(
-                f"`/upgrade-energy` — **{fmt_amount(config.ENERGY_UPGRADE_COST)}** "
-                f"for **+{config.ENERGY_CAP_PER_UPGRADE}** max energy "
-                f"(current cap **{cap}**)"
-            ),
-            inline=False,
-        )
-        embed.set_footer(text="Instant shifts: /work <job>")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_jobs_panel(interaction, self)
 
     @app_commands.command(name="work", description="Work a job instantly (costs energy).")
     @app_commands.describe(job="Job to work")
@@ -106,72 +82,16 @@ class Jobs(commands.Cog):
             await interaction.response.send_message("Unknown job.", ephemeral=True)
             return
 
-        ok, err = await self.bot.db.spend_job_energy(
+        result_embed, err = await execute_job_shift(
+            self,
             interaction.user.id,
             interaction.guild_id,
-            job_def.energy_cost,
+            job,
         )
-        if not ok:
-            if err == "energy":
-                energy_text, current, cap = await self._energy_display(
-                    interaction.user.id,
-                    interaction.guild_id,
-                )
-                await interaction.response.send_message(
-                    f"Not enough energy. Need **{job_def.energy_cost}**, "
-                    f"you have **{current}/{cap}**.\n{energy_text}",
-                    ephemeral=True,
-                )
-                return
-            await interaction.response.send_message(
-                "Could not start that shift.",
-                ephemeral=True,
-            )
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
             return
-
-        from utils.classes import get_modifiers
-
-        class_id = await self.bot.db.get_class_id(interaction.user.id, interaction.guild_id)
-        job_mult = get_modifiers(class_id).job_payout_mult
-        aspect_mult = (
-            await self.bot.db.get_equipped_aspect_bonuses(
-                interaction.user.id,
-                interaction.guild_id,
-            )
-        ).work_income_mult
-        payout = roll_job_payout(job_def, payout_mult=job_mult * aspect_mult)
-        await self.bot.db.credit_wallet(
-            interaction.user.id,
-            interaction.guild_id,
-            payout,
-        )
-        await record_quest_event(
-            self.bot.db,
-            interaction.guild_id,
-            interaction.user.id,
-            "job_work",
-        )
-
-        energy_text, current, cap = await self._energy_display(
-            interaction.user.id,
-            interaction.guild_id,
-        )
-        embed = discord.Embed(
-            title=f"{job_def.emoji} {job_def.name} shift complete",
-            description=job_def.description,
-            color=discord.Color.green(),
-        )
-        pay_note = f"**+{fmt_amount(payout)}**"
-        if aspect_mult > 1.0:
-            pay_note += f" (×{aspect_mult:.2f} aspect)"
-        embed.add_field(name="Pay", value=pay_note, inline=True)
-        embed.add_field(
-            name="Energy spent",
-            value=f"**-{job_def.energy_cost}** ({current}/{cap} left)",
-            inline=True,
-        )
-        embed.add_field(name="Energy", value=energy_text, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=result_embed, ephemeral=True)
 
     @app_commands.command(
         name="upgrade-energy",
