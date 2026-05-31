@@ -50,7 +50,7 @@ from utils.summoner_penalty import (
     summoner_defense_retention,
     summoner_penalty_summary,
 )
-from utils.boss_ui import BossAttackResult, BossFightView, send_boss_fight_panel
+from utils.boss_ui import BossAttackResult, BossFightView, BossPanelResult, send_boss_fight_panel
 
 BOSS_NAME = "Hannah"
 BOSS_NAME_TOMASS = config.BOSS_NAME_TOMASS
@@ -771,6 +771,21 @@ class Boss(commands.Cog):
             if loadout.off_hand is not None:
                 weapon = f"{weapon} + {loadout.off_hand.name}"
             embed.add_field(name="Your loadout", value=weapon, inline=True)
+            max_hp = await self._max_hp(member.id, guild_id)
+            await self.bot.db.sync_combat_hp(member.id, guild_id, max_hp)
+            combat = await self.bot.db.get_combat_state(member.id, guild_id)
+            if combat is None:
+                player_hp, player_max = max_hp, max_hp
+            else:
+                player_hp, player_max = combat
+            embed.add_field(
+                name="Your HP",
+                value=(
+                    f"`{hp_bar(player_hp, player_max)}` "
+                    f"**{int(player_hp)}/{int(player_max)}**"
+                ),
+                inline=True,
+            )
             damage_rows = await self.bot.db.list_boss_damage(guild_id)
             your_damage = 0.0
             for row in damage_rows:
@@ -782,8 +797,59 @@ class Boss(commands.Cog):
                 value=fmt_amount(your_damage) if your_damage > 0 else "_None yet_",
                 inline=True,
             )
-        embed.set_footer(text="⚔️ Attack · Refresh · Raid LB · /cast and /heal supported")
+        embed.set_footer(
+            text=(
+                f"⚔️ Attack · 💊 Heal ({fmt_amount(config.BOSS_SELF_HEAL_COST)}) · "
+                "✨ Cast · 🧪 Use · Refresh · Raid LB"
+            ),
+        )
         return embed, None
+
+    async def execute_boss_self_heal(
+        self,
+        member: discord.Member,
+        guild: discord.Guild,
+    ) -> BossPanelResult:
+        guild_id = guild.id
+        boss = await self.bot.db.get_active_boss(guild_id)
+        if boss is None:
+            return BossPanelResult(error="No boss is active right now.")
+
+        max_hp = await self._max_hp(member.id, guild_id)
+        await self.bot.db.sync_combat_hp(member.id, guild_id, max_hp)
+        downed = await self.bot.db.is_downed(member.id, guild_id)
+        combat = await self.bot.db.get_combat_state(member.id, guild_id)
+        current_hp = max_hp if combat is None else float(combat[0])
+
+        if not downed and current_hp >= max_hp:
+            return BossPanelResult(error="You're already at full HP.")
+
+        if not await self.bot.db.debit_wallet(member.id, guild_id, config.BOSS_SELF_HEAL_COST):
+            return BossPanelResult(
+                error=(
+                    f"Self heal costs **{fmt_amount(config.BOSS_SELF_HEAL_COST)}**."
+                ),
+            )
+
+        if downed:
+            await self.bot.db.set_downed_until(member.id, guild_id, 0)
+        await self.bot.db.restore_player_hp(member.id, guild_id, max_hp)
+        await self.bot.db.record_heal(guild_id, member.id, member.id)
+        await self.bot.db.increment_progress(
+            member.id,
+            guild_id,
+            heals_given=1,
+        )
+        await record_quest_event(self.bot.db, guild_id, member.id, "boss_heal")
+
+        action = "revived" if downed else "healed up"
+        return BossPanelResult(
+            message=(
+                f"**{member.display_name}** {action} "
+                f"(-{fmt_amount(config.BOSS_SELF_HEAL_COST)} · "
+                f"**{int(max_hp)}/{int(max_hp)}** HP)."
+            ),
+        )
 
     async def execute_boss_attack(
         self,
@@ -1156,6 +1222,34 @@ class Boss(commands.Cog):
             await interaction.response.send_message("That user is not downed.", ephemeral=True)
             return
 
+        self_heal = target.id == interaction.user.id
+        if self_heal:
+            if not await self.bot.db.debit_wallet(
+                interaction.user.id,
+                interaction.guild_id,
+                config.BOSS_SELF_HEAL_COST,
+            ):
+                await interaction.response.send_message(
+                    f"Self revive costs **{fmt_amount(config.BOSS_SELF_HEAL_COST)}**.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            heal_reward = config.HEALER_ALLY_REWARD
+            bless_id = await self.bot.db.consume_pending_spell(
+                interaction.user.id,
+                interaction.guild_id,
+            )
+            if bless_id:
+                bless = get_skill(bless_id)
+                if bless is not None and bless.effect == "heal_ally":
+                    heal_reward *= 1.0 + bless.magnitude
+            await self.bot.db.credit_wallet(
+                interaction.user.id,
+                interaction.guild_id,
+                heal_reward,
+            )
+
         await self.bot.db.set_downed_until(target.id, interaction.guild_id, 0)
         await self.bot.db.restore_player_hp(
             target.id,
@@ -1168,21 +1262,6 @@ class Boss(commands.Cog):
             interaction.guild_id,
             heals_given=1,
         )
-        self_heal = target.id == interaction.user.id
-        heal_reward = config.HEALER_SELF_REWARD if self_heal else config.HEALER_ALLY_REWARD
-        bless_id = await self.bot.db.consume_pending_spell(
-            interaction.user.id,
-            interaction.guild_id,
-        )
-        if bless_id:
-            bless = get_skill(bless_id)
-            if bless is not None and bless.effect == "heal_ally":
-                heal_reward *= 1.0 + bless.magnitude
-        await self.bot.db.credit_wallet(
-            interaction.user.id,
-            interaction.guild_id,
-            heal_reward,
-        )
         await record_quest_event(
             self.bot.db,
             interaction.guild_id,
@@ -1190,19 +1269,24 @@ class Boss(commands.Cog):
             "boss_heal",
         )
         if self_heal:
-            description = f"{interaction.user.mention} got back up."
+            description = (
+                f"{interaction.user.mention} got back up "
+                f"(-{fmt_amount(config.BOSS_SELF_HEAL_COST)})."
+            )
             title = "Self revive"
+            reward_text = f"-{fmt_amount(config.BOSS_SELF_HEAL_COST)}"
         else:
             description = f"{interaction.user.mention} revived {target.mention}."
             title = "Field medic"
+            reward_text = f"+{fmt_amount(heal_reward)}"
         embed = discord.Embed(
             title=title,
             description=description,
             color=discord.Color.green(),
         )
         embed.add_field(
-            name="Reward",
-            value=f"+{fmt_amount(heal_reward)}",
+            name="Cost" if self_heal else "Reward",
+            value=reward_text,
             inline=True,
         )
         await interaction.response.send_message(

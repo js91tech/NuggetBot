@@ -61,8 +61,13 @@ def quest_by_id(quest_id: str) -> QuestDef | None:
     return None
 
 
-def is_veteran(progress: dict[str, int | float]) -> bool:
-    return int(progress.get("prestige_level", 0)) > 0 or int(progress.get("bosses_killed", 0)) >= 3
+def is_veteran(progress) -> bool:
+    try:
+        prestige = int(progress["prestige_level"])
+        bosses = int(progress["bosses_killed"])
+    except (KeyError, TypeError, IndexError):
+        return False
+    return prestige > 0 or bosses >= 3
 
 
 async def ensure_onboarding_quests(db: Database, guild_id: int, user_id: int) -> None:

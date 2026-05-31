@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import config
 from cogs.boss import Boss
 from database import Database
 
@@ -54,6 +56,43 @@ class BossFightEmbedTests(unittest.IsolatedAsyncioTestCase):
         embed, err = await self.cog.build_boss_fight_embed(self.guild_id)
         self.assertIsNone(embed)
         self.assertEqual(err, "No boss is active right now.")
+
+    async def test_self_heal_costs_2500(self) -> None:
+        from unittest.mock import MagicMock
+
+        uid = 42
+        await self.db.ensure_user(uid, self.guild_id)
+        await self.db.credit_wallet(uid, self.guild_id, 10_000.0)
+        before = await self.db.get_balance(uid, self.guild_id)
+        await self.db.set_downed_until(uid, self.guild_id, time.time() + 120)
+        member = MagicMock()
+        member.id = uid
+        member.display_name = "Raider"
+        guild = MagicMock()
+        guild.id = self.guild_id
+
+        result = await self.cog.execute_boss_self_heal(member, guild)
+        self.assertIsNone(result.error)
+        self.assertFalse(await self.db.is_downed(uid, self.guild_id))
+        balance = await self.db.get_balance(uid, self.guild_id)
+        self.assertAlmostEqual(balance, before - config.BOSS_SELF_HEAL_COST)
+
+    async def test_self_heal_rejects_insufficient_funds(self) -> None:
+        from unittest.mock import MagicMock
+
+        uid = 43
+        await self.db.ensure_user(uid, self.guild_id)
+        await self.db.set_downed_until(uid, self.guild_id, time.time() + 120)
+        member = MagicMock()
+        member.id = uid
+        member.display_name = "Broke"
+        guild = MagicMock()
+        guild.id = self.guild_id
+
+        result = await self.cog.execute_boss_self_heal(member, guild)
+        self.assertIsNotNone(result.error)
+        assert result.error is not None
+        self.assertIn("2,500", result.error)
 
 
 if __name__ == "__main__":
