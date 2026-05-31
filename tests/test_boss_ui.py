@@ -58,7 +58,7 @@ class BossFightEmbedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(err, "No boss is active right now.")
 
     async def test_self_heal_costs_2500(self) -> None:
-        from unittest.mock import MagicMock
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         uid = 42
         await self.db.ensure_user(uid, self.guild_id)
@@ -71,11 +71,12 @@ class BossFightEmbedTests(unittest.IsolatedAsyncioTestCase):
         guild = MagicMock()
         guild.id = self.guild_id
 
-        result = await self.cog.execute_boss_self_heal(member, guild)
+        with patch("cogs.boss.record_quest_event", new_callable=AsyncMock):
+            result = await self.cog.execute_boss_self_heal(member, guild)
         self.assertIsNone(result.error)
         self.assertFalse(await self.db.is_downed(uid, self.guild_id))
         balance = await self.db.get_balance(uid, self.guild_id)
-        self.assertAlmostEqual(balance, before - config.BOSS_SELF_HEAL_COST)
+        self.assertAlmostEqual(before - balance, config.BOSS_SELF_HEAL_COST)
 
     async def test_self_heal_rejects_insufficient_funds(self) -> None:
         from unittest.mock import MagicMock
