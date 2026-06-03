@@ -7,10 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import config
 from database import Database
 from utils.boss_element_effects import (
+    attack_cooldown_while_debuffed,
     element_hazard_text,
-    extra_attack_cooldown_for_status,
+    roll_debuff_attack_cooldown,
     roll_element_proc,
 )
 
@@ -21,20 +23,42 @@ class BossElementEffectUtilTests(unittest.TestCase):
         self.assertIn("Fire", element_hazard_text("fire") or "")
         self.assertIn("Storm", element_hazard_text("storm") or "")
 
-    def test_extra_cooldown_stacks_frost_and_verdant(self) -> None:
+    def test_debuff_attack_cooldown_in_range(self) -> None:
+        lo, hi = config.BOSS_DEBUFF_ATTACK_COOLDOWN_SECONDS
+        for _ in range(20):
+            cd = roll_debuff_attack_cooldown()
+            self.assertGreaterEqual(cd, lo)
+            self.assertLessEqual(cd, hi)
+
+    def test_attack_cooldown_while_debuffed_uses_stored_value(self) -> None:
         now = 1000.0
-        extra = extra_attack_cooldown_for_status(
+        cd = attack_cooldown_while_debuffed(
             attack_slow_until=now + 10,
-            verdant_root_until=now + 5,
+            verdant_root_until=0.0,
+            debuff_attack_cooldown=9.0,
             now=now,
         )
-        self.assertEqual(extra, 5)
+        self.assertEqual(cd, 9.0)
 
     @patch("utils.boss_element_effects.random.random", return_value=0.0)
     def test_roll_frost_proc(self, _random: object) -> None:
         proc = roll_element_proc("frost", now=100.0)
         self.assertIn("Chilled", proc.note)
         self.assertIsNotNone(proc.frost_slow_until)
+        self.assertIsNotNone(proc.debuff_attack_cooldown)
+        lo, hi = config.BOSS_DEBUFF_ATTACK_COOLDOWN_SECONDS
+        assert proc.debuff_attack_cooldown is not None
+        self.assertGreaterEqual(proc.debuff_attack_cooldown, lo)
+        self.assertLessEqual(proc.debuff_attack_cooldown, hi)
+
+    @patch("utils.boss_element_effects.random.random", return_value=0.0)
+    def test_roll_storm_stun_short_window(self, _random: object) -> None:
+        proc = roll_element_proc("storm", now=100.0)
+        self.assertIn("Stunned", proc.note)
+        assert proc.storm_stun_seconds is not None
+        lo, hi = config.BOSS_STORM_STUN_SECONDS
+        self.assertGreaterEqual(proc.storm_stun_seconds, lo)
+        self.assertLessEqual(proc.storm_stun_seconds, hi)
 
 
 class BossElementDatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -52,13 +76,14 @@ class BossElementDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         self.tmp.cleanup()
 
-    async def test_frost_slow_extends_attack_cooldown(self) -> None:
+    async def test_frost_slow_uses_debuff_attack_cooldown(self) -> None:
         now = time.time()
         await self.db.record_boss_attack_time(self.guild_id, self.user_id, now)
         await self.db.apply_boss_element_status(
             self.guild_id,
             self.user_id,
             frost_slow_until=now + 30,
+            debuff_attack_cooldown=10.0,
         )
         remaining = await self.db.boss_attack_cooldown_remaining(
             self.guild_id,
@@ -67,7 +92,23 @@ class BossElementDatabaseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(remaining)
         assert remaining is not None
-        self.assertGreater(remaining, 3.0)
+        self.assertGreater(remaining, 7.0)
+
+    async def test_record_boss_attack_uses_base_cooldown_range(self) -> None:
+        now = time.time()
+        await self.db.record_boss_attack_time(self.guild_id, self.user_id, now)
+        remaining = await self.db.boss_attack_cooldown_remaining(
+            self.guild_id,
+            self.user_id,
+            at=now + 1,
+        )
+        self.assertIsNotNone(remaining)
+        assert remaining is not None
+        self.assertLessEqual(
+            remaining,
+            config.BOSS_ATTACK_COOLDOWN_MAX_SECONDS - 1 + 0.01,
+        )
+        self.assertGreater(remaining, 0.0)
 
     async def test_fire_dot_ticks_damage(self) -> None:
         max_hp = 200.0

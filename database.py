@@ -479,6 +479,7 @@ class Database:
         await self._migrate_scourge_virus()
         await self._migrate_boss_rebalance()
         await self._migrate_boss_element_status()
+        await self._migrate_boss_attack_pacing()
 
 
     async def _migrate_scourge_virus(self) -> None:
@@ -524,6 +525,62 @@ class Database:
             )
             """,
         )
+        await self.conn.commit()
+
+
+    async def _migrate_boss_attack_pacing(self) -> None:
+        """Per-attack cooldown + elemental debuff pacing columns."""
+        if self.is_postgres:
+            for table, column, ddl in (
+                (
+                    "boss_attack_cooldowns",
+                    "cooldown_seconds",
+                    (
+                        "ALTER TABLE boss_attack_cooldowns ADD COLUMN cooldown_seconds "
+                        "REAL NOT NULL DEFAULT 4"
+                    ),
+                ),
+                (
+                    "boss_raider_status",
+                    "debuff_attack_cooldown",
+                    (
+                        "ALTER TABLE boss_raider_status ADD COLUMN debuff_attack_cooldown "
+                        "REAL NOT NULL DEFAULT 0"
+                    ),
+                ),
+            ):
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = ?
+                      AND column_name = ?
+                    """,
+                    (table, column),
+                )
+                if await cursor.fetchone() is not None:
+                    continue
+                await self.conn.execute(ddl)
+            await self.conn.commit()
+            return
+
+        for table, column, sqlite_ddl in (
+            (
+                "boss_attack_cooldowns",
+                "cooldown_seconds",
+                "ALTER TABLE boss_attack_cooldowns ADD COLUMN cooldown_seconds REAL NOT NULL DEFAULT 4",
+            ),
+            (
+                "boss_raider_status",
+                "debuff_attack_cooldown",
+                "ALTER TABLE boss_raider_status ADD COLUMN debuff_attack_cooldown REAL NOT NULL DEFAULT 0",
+            ),
+        ):
+            cursor = await self.conn.execute(f"PRAGMA table_info({table})")
+            cols = {row[1] for row in await cursor.fetchall()}
+            if column not in cols:
+                await self.conn.execute(sqlite_ddl)
         await self.conn.commit()
 
     async def _migrate_boss_rebalance(self) -> None:
@@ -3665,12 +3722,12 @@ class Database:
         *,
         at: float | None = None,
     ) -> float | None:
-        from utils.boss_element_effects import extra_attack_cooldown_for_status
+        from utils.boss_element_effects import attack_cooldown_while_debuffed
 
         now = time.time() if at is None else at
         cursor = await self.conn.execute(
             """
-            SELECT last_attack
+            SELECT last_attack, cooldown_seconds
             FROM boss_attack_cooldowns
             WHERE guild_id = ? AND user_id = ?
             """,
@@ -3683,16 +3740,22 @@ class Database:
         if last_attack <= 0:
             return None
 
-        extra_cooldown = 0
+        base_cooldown = float(row["cooldown_seconds"])
+        if base_cooldown <= 0:
+            base_cooldown = float(config.BOSS_ATTACK_COOLDOWN_SECONDS)
+
+        cooldown_seconds = base_cooldown
         status = await self.get_boss_raider_status(guild_id, user_id)
         if status is not None:
-            extra_cooldown = extra_attack_cooldown_for_status(
+            debuff_cd = attack_cooldown_while_debuffed(
                 float(status["attack_slow_until"]),
                 float(status["verdant_root_until"]),
+                float(status["debuff_attack_cooldown"]),
                 now=now,
             )
+            if debuff_cd is not None:
+                cooldown_seconds = debuff_cd
 
-        cooldown_seconds = config.BOSS_ATTACK_COOLDOWN_SECONDS + extra_cooldown
         remaining = (last_attack + cooldown_seconds) - now
         return remaining if remaining > 0 else None
 
@@ -3702,16 +3765,25 @@ class Database:
         user_id: int,
         timestamp: float | None = None,
     ) -> None:
+        import random
+
         ts = time.time() if timestamp is None else timestamp
+        cooldown_seconds = float(
+            random.randint(
+                config.BOSS_ATTACK_COOLDOWN_MIN_SECONDS,
+                config.BOSS_ATTACK_COOLDOWN_MAX_SECONDS,
+            ),
+        )
         async with self._write_lock:
             await self.conn.execute(
                 """
-                INSERT INTO boss_attack_cooldowns (guild_id, user_id, last_attack)
-                VALUES (?, ?, ?)
+                INSERT INTO boss_attack_cooldowns (guild_id, user_id, last_attack, cooldown_seconds)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(guild_id, user_id) DO UPDATE SET
-                    last_attack = excluded.last_attack
+                    last_attack = excluded.last_attack,
+                    cooldown_seconds = excluded.cooldown_seconds
                 """,
-                (guild_id, user_id, ts),
+                (guild_id, user_id, ts, cooldown_seconds),
             )
             await self.conn.commit()
 
@@ -3847,7 +3919,8 @@ class Database:
         cursor = await self.conn.execute(
             """
             SELECT attack_slow_until, verdant_root_until,
-                   dot_ticks_remaining, dot_damage, dot_next_tick_at
+                   dot_ticks_remaining, dot_damage, dot_next_tick_at,
+                   debuff_attack_cooldown
             FROM boss_raider_status
             WHERE guild_id = ? AND user_id = ?
             """,
@@ -3863,12 +3936,14 @@ class Database:
         frost_slow_until: float | None = None,
         verdant_root_until: float | None = None,
         fire_burn: tuple[float, int, float] | None = None,
+        debuff_attack_cooldown: float | None = None,
     ) -> None:
         async with self._write_lock:
             cursor = await self.conn.execute(
                 """
                 SELECT attack_slow_until, verdant_root_until,
-                       dot_ticks_remaining, dot_damage, dot_next_tick_at
+                       dot_ticks_remaining, dot_damage, dot_next_tick_at,
+                       debuff_attack_cooldown
                 FROM boss_raider_status
                 WHERE guild_id = ? AND user_id = ?
                 """,
@@ -3880,11 +3955,14 @@ class Database:
             dot_ticks = int(row["dot_ticks_remaining"]) if row is not None else 0
             dot_damage = float(row["dot_damage"]) if row is not None else 0.0
             dot_next = float(row["dot_next_tick_at"]) if row is not None else 0.0
+            debuff_cd = float(row["debuff_attack_cooldown"]) if row is not None else 0.0
 
             if frost_slow_until is not None:
                 slow_until = max(slow_until, frost_slow_until)
             if verdant_root_until is not None:
                 root_until = max(root_until, verdant_root_until)
+            if debuff_attack_cooldown is not None:
+                debuff_cd = max(debuff_cd, debuff_attack_cooldown)
             if fire_burn is not None:
                 tick_damage, ticks, first_tick = fire_burn
                 dot_damage = tick_damage
@@ -3895,15 +3973,17 @@ class Database:
                 """
                 INSERT INTO boss_raider_status (
                     guild_id, user_id, attack_slow_until, verdant_root_until,
-                    dot_ticks_remaining, dot_damage, dot_next_tick_at
+                    dot_ticks_remaining, dot_damage, dot_next_tick_at,
+                    debuff_attack_cooldown
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(guild_id, user_id) DO UPDATE SET
                     attack_slow_until = excluded.attack_slow_until,
                     verdant_root_until = excluded.verdant_root_until,
                     dot_ticks_remaining = excluded.dot_ticks_remaining,
                     dot_damage = excluded.dot_damage,
-                    dot_next_tick_at = excluded.dot_next_tick_at
+                    dot_next_tick_at = excluded.dot_next_tick_at,
+                    debuff_attack_cooldown = excluded.debuff_attack_cooldown
                 """,
                 (
                     guild_id,
@@ -3913,6 +3993,7 @@ class Database:
                     dot_ticks,
                     dot_damage,
                     dot_next,
+                    debuff_cd,
                 ),
             )
             await self.conn.commit()

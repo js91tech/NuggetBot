@@ -1279,6 +1279,7 @@ class Boss(commands.Cog):
                 frost_slow_until=proc.frost_slow_until,
                 verdant_root_until=proc.verdant_root_until,
                 fire_burn=proc.fire_burn,
+                debuff_attack_cooldown=proc.debuff_attack_cooldown,
             )
         if proc.storm_stun_seconds is not None:
             await self.bot.db.set_downed_until(

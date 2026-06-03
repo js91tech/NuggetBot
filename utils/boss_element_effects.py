@@ -17,28 +17,39 @@ class ElementProcRoll:
     fire_burn: tuple[float, int, float] | None = None
     storm_stun_seconds: float | None = None
     void_mana_drain: int | None = None
+    debuff_attack_cooldown: float | None = None
 
 
+def roll_debuff_attack_cooldown() -> float:
+    lo, hi = config.BOSS_DEBUFF_ATTACK_COOLDOWN_SECONDS
+    return float(random.randint(lo, hi))
 
+
+def roll_frost_or_root_duration() -> float:
+    lo, hi = config.BOSS_FROST_SLOW_SECONDS
+    return float(random.randint(lo, hi))
 
 
 def _element_hazards() -> dict[str, str]:
+    lo, hi = config.BOSS_DEBUFF_ATTACK_COOLDOWN_SECONDS
     return {
         "frost": (
-            f"❄️ **Frost** — counters may **slow** you (+{config.BOSS_FROST_EXTRA_ATTACK_COOLDOWN}s between attacks for {config.BOSS_FROST_SLOW_SECONDS}s)."
+            f"❄️ **Frost** — counters may **chill** you "
+            f"({lo}–{hi}s between attacks while slowed)."
         ),
         "fire": (
             f"🔥 **Fire** — counters may **burn** you ({config.BOSS_FIRE_BURN_PROC_CHANCE:.0%} chance, "
             f"{config.BOSS_FIRE_BURN_TICKS} ticks every {config.BOSS_FIRE_BURN_INTERVAL_SECONDS}s)."
         ),
         "storm": (
-            f"⚡ **Storm** — counters may **stun** you for **{config.BOSS_STORM_STUN_SECONDS[0]}–{config.BOSS_STORM_STUN_SECONDS[1]}s**."
+            f"⚡ **Storm** — counters may **stun** you for **{lo}–{hi}s**."
         ),
         "void": (
             f"🌑 **Void** — counters may **drain mana** ({config.BOSS_VOID_DRAIN_PROC_CHANCE:.0%} chance)."
         ),
         "verdant": (
-            f"🌿 **Verdant** — counters may **root** you (+{config.BOSS_VERDANT_EXTRA_ATTACK_COOLDOWN}s between attacks for {config.BOSS_VERDANT_ROOT_SECONDS}s)."
+            f"🌿 **Verdant** — counters may **root** you "
+            f"({lo}–{hi}s between attacks while rooted)."
         ),
     }
 
@@ -54,15 +65,18 @@ def roll_element_proc(element: str | None, *, now: float) -> ElementProcRoll:
     if not element:
         return ElementProcRoll()
     elem = str(element).lower()
+    debuff_cd = roll_debuff_attack_cooldown()
 
     if elem == "frost" and random.random() < config.BOSS_FROST_PROC_CHANCE:
-        until = now + config.BOSS_FROST_SLOW_SECONDS
+        duration = roll_frost_or_root_duration()
+        until = now + duration
         return ElementProcRoll(
             note=(
-                f" ❄️ **Chilled!** +{config.BOSS_FROST_EXTRA_ATTACK_COOLDOWN}s "
-                f"between attacks for **{config.BOSS_FROST_SLOW_SECONDS}s**."
+                f" ❄️ **Chilled!** **{int(debuff_cd)}s** between attacks "
+                f"for **{int(duration)}s**."
             ),
             frost_slow_until=until,
+            debuff_attack_cooldown=debuff_cd,
         )
 
     if elem == "fire" and random.random() < config.BOSS_FIRE_BURN_PROC_CHANCE:
@@ -93,28 +107,30 @@ def roll_element_proc(element: str | None, *, now: float) -> ElementProcRoll:
         )
 
     if elem == "verdant" and random.random() < config.BOSS_VERDANT_ROOT_PROC_CHANCE:
-        until = now + config.BOSS_VERDANT_ROOT_SECONDS
+        duration = roll_frost_or_root_duration()
+        until = now + duration
         return ElementProcRoll(
             note=(
-                f" 🌿 **Rooted!** +{config.BOSS_VERDANT_EXTRA_ATTACK_COOLDOWN}s "
-                f"between attacks for **{config.BOSS_VERDANT_ROOT_SECONDS}s**."
+                f" 🌿 **Rooted!** **{int(debuff_cd)}s** between attacks "
+                f"for **{int(duration)}s**."
             ),
             verdant_root_until=until,
+            debuff_attack_cooldown=debuff_cd,
         )
 
     return ElementProcRoll()
 
 
-def extra_attack_cooldown_for_status(
+def attack_cooldown_while_debuffed(
     attack_slow_until: float,
     verdant_root_until: float,
+    debuff_attack_cooldown: float,
     *,
     now: float,
-) -> int:
-    """Extra seconds added to the base boss attack cooldown while debuffed."""
-    extra = 0
-    if attack_slow_until > now:
-        extra += config.BOSS_FROST_EXTRA_ATTACK_COOLDOWN
-    if verdant_root_until > now:
-        extra += config.BOSS_VERDANT_EXTRA_ATTACK_COOLDOWN
-    return extra
+) -> float | None:
+    """Seconds between boss attacks while chilled or rooted, if a debuff is active."""
+    if attack_slow_until <= now and verdant_root_until <= now:
+        return None
+    if debuff_attack_cooldown > 0:
+        return debuff_attack_cooldown
+    return roll_debuff_attack_cooldown()
