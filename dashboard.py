@@ -62,48 +62,40 @@ class DashboardServer:
 
     async def login(self, request: web.Request) -> web.Response:
         data = await request.post()
-        token = str(data.get("token", ""))
+        token = str(data.get("token", "")).strip()
         if not self._valid_token(token):
             return self._html_response(self._login_page("Invalid dashboard token."), status=401)
 
         response = web.HTTPFound("/dashboard")
-        response.set_cookie(
-            config.DASHBOARD_COOKIE_NAME,
-            self._session_value(),
-            httponly=True,
-            secure=request.secure,
-            samesite="Strict",
-            max_age=60 * 60 * 12,
-        )
-        raise response
+        self._set_session_cookie(response, request)
+        return response
 
     async def logout(self, request: web.Request) -> web.Response:
-        del request
         response = web.HTTPFound("/")
         response.del_cookie(config.DASHBOARD_COOKIE_NAME)
-        raise response
+        return response
 
     async def dashboard(self, request: web.Request) -> web.Response:
         if not config.DASHBOARD_TOKEN:
             return self._html_response(self._disabled_page(), status=503)
 
         query_token = request.query.get("token")
-        if query_token is not None and self._valid_token(query_token):
+        if query_token is not None and self._valid_token(str(query_token).strip()):
             response = web.HTTPFound("/dashboard")
-            response.set_cookie(
-                config.DASHBOARD_COOKIE_NAME,
-                self._session_value(),
-                httponly=True,
-                secure=request.secure,
-                samesite="Strict",
-                max_age=60 * 60 * 12,
-            )
-            raise response
+            self._set_session_cookie(response, request)
+            return response
 
         if not self._authorized(request):
             return self._html_response(self._login_page())
 
-        snapshots = await self._snapshots()
+        try:
+            snapshots = await self._snapshots()
+        except Exception:
+            logging.exception("Dashboard snapshot failed")
+            return self._html_response(
+                self._login_page("Dashboard failed to load server data. Check bot logs."),
+                status=500,
+            )
         return self._html_response(self._dashboard_page(snapshots))
 
     async def api_status(self, request: web.Request) -> web.Response:
@@ -173,6 +165,12 @@ class DashboardServer:
             await self.bot.db.set_split_announcement_channels(
                 guild_id,
                 bool(payload["split_announcement_channels"]),
+            )
+
+        if "scourge_event_enabled" in payload:
+            await self.bot.db.set_scourge_event_enabled(
+                guild_id,
+                bool(payload["scourge_event_enabled"]),
             )
 
         settings = await self.bot.db.get_guild_channel_settings(guild_id)
@@ -318,18 +316,40 @@ class DashboardServer:
         return await self._settings_payload(guild_id, config.DUEL_TUNING_SETTINGS)
 
     def _authorized(self, request: web.Request) -> bool:
-        header = request.headers.get("X-Dashboard-Token", "")
+        header = request.headers.get("X-Dashboard-Token", "").strip()
         if self._valid_token(header):
             return True
         auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer ") and self._valid_token(auth_header.removeprefix("Bearer ")):
+        if auth_header.startswith("Bearer ") and self._valid_token(
+            auth_header.removeprefix("Bearer ").strip(),
+        ):
             return True
         cookie = request.cookies.get(config.DASHBOARD_COOKIE_NAME, "")
         return hmac.compare_digest(cookie, self._session_value())
 
     @staticmethod
     def _valid_token(token: str) -> bool:
-        return bool(config.DASHBOARD_TOKEN) and hmac.compare_digest(token, config.DASHBOARD_TOKEN)
+        cleaned = token.strip()
+        if not cleaned or not config.DASHBOARD_TOKEN:
+            return False
+        return hmac.compare_digest(cleaned, config.DASHBOARD_TOKEN.strip())
+
+    @staticmethod
+    def _cookie_secure(request: web.Request) -> bool:
+        if request.secure:
+            return True
+        forwarded = request.headers.get("X-Forwarded-Proto", "")
+        return forwarded.split(",", 1)[0].strip().lower() == "https"
+
+    def _set_session_cookie(self, response: web.Response, request: web.Request) -> None:
+        response.set_cookie(
+            config.DASHBOARD_COOKIE_NAME,
+            self._session_value(),
+            httponly=True,
+            secure=self._cookie_secure(request),
+            samesite="Lax",
+            max_age=60 * 60 * 12,
+        )
 
     @staticmethod
     def _session_value() -> str:
@@ -549,6 +569,7 @@ class DashboardServer:
                 const main = form.elements.main_channel_id.value;
                 const designated = form.elements.designated_channel_id.value;
                 const split = form.elements.split_announcement_channels.checked;
+                const scourge = form.elements.scourge_event_enabled.checked;
                 status.textContent = "Saving...";
                 status.className = "channel-status";
                 try {{
