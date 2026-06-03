@@ -70,6 +70,14 @@ class ScourgeDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.db.get_scourge_event_enabled(self.guild_id))
 
 
+
+    def test_schedule_next_hourly_near_one_hour(self) -> None:
+        now = 1_000_000.0
+        samples = [Scourge._schedule_next_hourly(now) - now for _ in range(30)]
+        for delta in samples:
+            self.assertGreaterEqual(delta, 54 * 60)
+            self.assertLessEqual(delta, 66 * 60)
+
 class ScourgeCogTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

@@ -50,6 +50,19 @@ class Scourge(commands.Cog):
         lo, hi = config.SCOURGE_HOURLY_JITTER_SECONDS
         return now + random.randint(lo, hi)
 
+
+    async def _resolve_scourge_channel(
+        self,
+        guild: discord.Guild,
+        *,
+        stored_channel_id: int | None = None,
+    ) -> discord.abc.Messageable | None:
+        if stored_channel_id is not None:
+            existing = guild.get_channel(int(stored_channel_id))
+            if isinstance(existing, discord.abc.Messageable):
+                return existing
+        return await resolve_bot_announcement_channel(guild, self.bot.db)
+
     def _replace_timer(self, guild_id: int, channel_id: int) -> None:
         old = self._timers.pop(guild_id, None)
         if old is not None:
@@ -296,14 +309,24 @@ class Scourge(commands.Cog):
             if row is not None or pot is not None or guild.id in self._timers:
                 await self._shutdown_scourge(guild.id)
             return
-        channel = await resolve_bot_announcement_channel(guild, self.bot.db)
+
+        row = await self.bot.db.get_scourge_event(guild.id)
+        stored_channel_id = int(row["channel_id"]) if row is not None else None
+        channel = await self._resolve_scourge_channel(
+            guild,
+            stored_channel_id=stored_channel_id,
+        )
         if channel is None:
+            logging.warning(
+                "Scourge tick skipped for guild %s: no writable announcement channel",
+                guild.id,
+            )
             return
         channel_id = getattr(channel, "id", None)
         if channel_id is None:
             return
-        await self._ensure_event_row(guild, channel_id)
 
+        await self._ensure_event_row(guild, channel_id)
         row = await self.bot.db.get_scourge_event(guild.id)
         if row is None:
             return
@@ -312,6 +335,8 @@ class Scourge(commands.Cog):
         phase = str(row["phase"])
         phase_ends = float(row["phase_ends_at"])
         next_hourly = float(row["next_hourly_roll_at"])
+        if next_hourly <= 0:
+            next_hourly = now
         infections_done = int(row["infections_done"])
         next_infection = float(row["next_infection_at"])
 
@@ -326,14 +351,20 @@ class Scourge(commands.Cog):
                     phase_ends_at=0.0,
                     next_hourly_roll_at=self._schedule_next_hourly(now),
                 )
+                logging.debug(
+                    "Scourge hourly roll skipped for guild %s; next attempt scheduled",
+                    guild.id,
+                )
                 return
+            next_fire = self._schedule_next_hourly(now)
             await self.bot.db.upsert_scourge_event(
                 guild.id,
                 channel_id,
                 phase="warning",
                 phase_ends_at=now + config.SCOURGE_WARNING_SECONDS,
-                next_hourly_roll_at=next_hourly,
+                next_hourly_roll_at=next_fire,
             )
+            logging.info("Scourge warning started for guild %s", guild.id)
             await self._send_warning(guild, channel_id)
             return
 
