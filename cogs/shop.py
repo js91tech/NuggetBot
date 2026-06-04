@@ -84,7 +84,9 @@ class Shop(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
-        del interaction
+        if interaction.guild_id is None:
+            return []
+        wallet = await self.bot.db.get_balance(interaction.user.id, interaction.guild_id)
         current_lower = current.lower()
         matches = [
             item
@@ -93,9 +95,16 @@ class Shop(commands.Cog):
             and item.price > 0
             and (current_lower in item.id.lower() or current_lower in item.name.lower())
         ][:25]
-        return [
-            app_commands.Choice(name=f"{item.name} ({item.id})", value=item.id) for item in matches
-        ]
+        choices: list[app_commands.Choice[str]] = []
+        for item in matches:
+            price_text = fmt_amount(item.price)
+            if wallet >= item.price:
+                afford = "✓"
+            else:
+                afford = f"need {fmt_amount(item.price - wallet)} more"
+            label = f"{item.name} — {price_text} ({afford})"
+            choices.append(app_commands.Choice(name=label[:100], value=item.id))
+        return choices
 
     async def sell_item_autocomplete(
         self,

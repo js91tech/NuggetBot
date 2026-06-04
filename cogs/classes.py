@@ -40,7 +40,7 @@ class Classes(commands.Cog):
         cls = get_class(class_id)
         if cls is None:
             desc = (
-                "No class yet. Pick a starter with `/class choose`.\n"
+                "No class yet. Pick a starter with `/class-choose`.\n"
                 f"Starters: **{', '.join(STARTER_IDS)}**"
             )
             embed = discord.Embed(title=f"{target.display_name}'s Class", description=desc, color=discord.Color.greyple())
@@ -148,8 +148,40 @@ class Classes(commands.Cog):
             return
         await self._apply_evolution(interaction, chosen.class_id)
 
+    async def class_evolve_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        class_id_cur, xp, roots = await self._profile(
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        options = can_evolve(class_id_cur, xp, roots)
+        current_lower = current.lower()
+        choices: list[app_commands.Choice[str]] = []
+        for option in options:
+            if (
+                current_lower
+                and current_lower not in option.class_id.lower()
+                and current_lower not in option.name.lower()
+            ):
+                continue
+            choices.append(
+                app_commands.Choice(
+                    name=f"{option.emoji} {option.name} ({option.class_id})"[:100],
+                    value=option.class_id,
+                ),
+            )
+            if len(choices) >= 25:
+                break
+        return choices
+
     @app_commands.command(name="class-evolve-to", description="Evolve into a specific class.")
     @app_commands.describe(class_id="Class id from /class")
+    @app_commands.autocomplete(class_id=class_evolve_autocomplete)
     @app_commands.guild_only()
     async def class_evolve_to(self, interaction: discord.Interaction, class_id: str) -> None:
         if interaction.guild_id is None:
