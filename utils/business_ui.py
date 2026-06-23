@@ -363,11 +363,33 @@ BRANCH_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+# Per-upgrade effect annotations (what each upgrade actually does).
+def _upgrade_effects() -> dict[str, str]:
+    rep = int(config.BUSINESS_REPUTATION_BONUS_PER_LEVEL * 100)
+    eff = int(config.BUSINESS_EFFICIENCY_BONUS_PER_LEVEL * 100)
+    growth = int(config.BUSINESS_GROWTH_BRANCH_BONUS_PER_LEVEL * 100)
+    prod = int(config.BUSINESS_PRODUCTION_BRANCH_BONUS_PER_LEVEL * 100)
+    return {
+        "security": "🛡️ defense vs attacks",
+        "reputation": f"💹 +{rep}% income / lvl",
+        "efficiency": f"💹 +{eff}% income / lvl",
+        "capacity": "📦 +stored-revenue cap",
+        "branch_security": "🛡️ defense vs attacks",
+        "branch_growth": f"💹 +{growth}% income / lvl",
+        "branch_production": f"💹 +{prod}% income / lvl",
+    }
+
+
 def build_upgrade_embed(row: object) -> discord.Embed:
     tier = int(row["tier"])
+    effects = _upgrade_effects()
+    hourly = _hourly_from_row(row)
     embed = discord.Embed(
         title="Business upgrades",
-        description="Spend nuggets to improve your business. Costs rise per level.",
+        description=(
+            f"Current income: **{fmt_amount(hourly)}/hr**\n"
+            "💹 upgrades scale income · 🛡️ defense · 📦 storage. Costs rise per level."
+        ),
         color=discord.Color.blurple(),
     )
     attr_lines = []
@@ -376,7 +398,7 @@ def build_upgrade_embed(row: object) -> discord.Embed:
         cost = upgrade_cost(tier, lvl)
         cap = config.BUSINESS_ATTRIBUTE_MAX
         suffix = "MAX" if lvl >= cap else f"{fmt_amount(cost)}"
-        attr_lines.append(f"{label} — Lv **{lvl}**/{cap} · next {suffix}")
+        attr_lines.append(f"{label} — Lv **{lvl}**/{cap} · {effects[column]} · next {suffix}")
     embed.add_field(name="Attributes", value="\n".join(attr_lines), inline=False)
 
     branch_lines = []
@@ -385,7 +407,7 @@ def build_upgrade_embed(row: object) -> discord.Embed:
         cost = upgrade_cost(tier, lvl)
         cap = config.BUSINESS_BRANCH_MAX
         suffix = "MAX" if lvl >= cap else f"{fmt_amount(cost)}"
-        branch_lines.append(f"{label} — Lv **{lvl}**/{cap} · next {suffix}")
+        branch_lines.append(f"{label} — Lv **{lvl}**/{cap} · {effects[column]} · next {suffix}")
     embed.add_field(name="Upgrade branches", value="\n".join(branch_lines), inline=False)
     return embed
 
@@ -399,6 +421,8 @@ class UpgradeButton(discord.ui.Button):
         self.attribute = attribute
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        before_row = await self.cog.bot.db.get_business(self.user_id, self.guild_id)
+        before_hourly = _hourly_from_row(before_row) if before_row is not None else 0.0
         cost, err = await self.cog.bot.db.upgrade_business_attribute(
             self.user_id, self.guild_id, self.attribute,
         )
@@ -415,10 +439,15 @@ class UpgradeButton(discord.ui.Button):
             self.cog.bot.db, self.guild_id, self.user_id, "business_upgrade",
         )
         row = await self.cog.bot.db.get_business(self.user_id, self.guild_id)
+        after_hourly = _hourly_from_row(row) if row is not None else before_hourly
         view = UpgradeBranchView(self.cog, self.guild_id, self.user_id)
         embed = build_upgrade_embed(row) if row is not None else discord.Embed(title="Upgrades")
         nice = self.label.split(" ", 1)[-1] if self.label else self.attribute
-        embed.description = f"✅ Upgraded **{nice}** for **{fmt_amount(cost)}**."
+        note = f"✅ Upgraded **{nice}** for **{fmt_amount(cost)}**."
+        delta = after_hourly - before_hourly
+        if delta > 0.001:
+            note += f" Income **+{fmt_amount(delta)}/hr** → **{fmt_amount(after_hourly)}/hr**!"
+        embed.description = note + "\n" + (embed.description or "")
         await interaction.response.edit_message(embed=embed, view=view)
 
 
