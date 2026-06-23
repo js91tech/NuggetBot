@@ -661,6 +661,13 @@ class DrugMathTests(unittest.TestCase):
         boosted = street_sale_multiplier(reputation_level=10, influence_pct=100.0)
         self.assertAlmostEqual(boosted, 1.2 * 1.3, places=4)
 
+    def test_cop_stats_scaled(self) -> None:
+        from utils.police_bosses import cop_encounter_hp, scaled_cop_stats
+
+        stats = scaled_cop_stats("normal")
+        self.assertLess(float(stats["counter_chance"]), config.BOSS_VARIANTS["normal"]["counter_chance"])
+        self.assertGreater(cop_encounter_hp("mythic", 200.0), cop_encounter_hp("normal", 200.0))
+
 
 class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -729,18 +736,41 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         guild_id, uid = 1, 100
         await self.db.ensure_user(uid, guild_id)
         await self._stock_product(uid, guild_id, "blue_dream", 10)
-        # Force no-raid by patching the raid chance to 0 via config is global; retry a few times.
         import config as cfg
 
         old = cfg.DRUG_RAID_CHANCE
         cfg.DRUG_RAID_CHANCE = 0.0
         try:
-            result = await self.db.sell_drugs_street(uid, guild_id, "blue_dream", 5)
+            result = await self.db.sell_drugs_street(
+                uid, guild_id, "blue_dream", 5, player_max_hp=200.0,
+            )
         finally:
             cfg.DRUG_RAID_CHANCE = old
         self.assertIsNone(result["error"])
-        self.assertFalse(result["raided"])
+        self.assertFalse(result.get("encounter"))
         self.assertGreater(float(result["total"]), 0)
+
+    async def test_street_bust_starts_cop_encounter(self) -> None:
+        guild_id, uid = 1, 100
+        await self.db.ensure_user(uid, guild_id)
+        await self._stock_product(uid, guild_id, "blue_dream", 5)
+        import config as cfg
+
+        old = cfg.DRUG_RAID_CHANCE
+        cfg.DRUG_RAID_CHANCE = 1.0
+        try:
+            result = await self.db.sell_drugs_street(
+                uid, guild_id, "blue_dream", 3, player_max_hp=250.0,
+            )
+        finally:
+            cfg.DRUG_RAID_CHANCE = old
+        self.assertIsNone(result.get("error"))
+        self.assertTrue(result.get("encounter"))
+        encounter = await self.db.get_drug_cop_encounter(uid, guild_id)
+        self.assertIsNotNone(encounter)
+        self.assertEqual(int(encounter["quantity"]), 3)
+        inv = await self.db.get_drug_inventory(uid, guild_id)
+        self.assertEqual(inv.get("blue_dream"), 5)
 
     async def test_street_sell_insufficient(self) -> None:
         guild_id, uid = 1, 100

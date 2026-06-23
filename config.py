@@ -646,11 +646,36 @@ MEGA_PROJECT_INCOME_BONUS_CAP = 1.0
 # or to other players. Risky, high-reward, consistent with the heist/bounty tone.
 DRUG_LAB_SLOTS = 3
 DRUG_STREET_PRICE_VARIANCE = 0.25
-DRUG_RAID_CHANCE = 0.10
+DRUG_RAID_CHANCE = 0.25
 DRUG_RAID_LOSS_FRACTION = 0.5
 DRUG_MARKET_TAX = 0.05
 DRUG_INDUSTRIAL_YIELD_BONUS = 0.20
 DRUG_MAX_LISTING_QTY = 100_000
+# Street busts: fight or flee themed police bosses (⅔ strength of raid bosses).
+DRUG_COP_STRENGTH_MULT = 2 / 3
+DRUG_COP_FLEE_SUCCESS_CHANCE = 0.55
+DRUG_COP_ARREST_CHANCE = 0.03
+DRUG_COP_ARREST_SECONDS = 15 * 60
+DRUG_COP_SOURCE_VARIANTS: tuple[str, ...] = (
+    "normal",
+    "enraged",
+    "shadow",
+    "celestial",
+    "mythic",
+    "tomass",
+    "zz_wrath",
+    "freaky_nikki",
+)
+DRUG_COP_DISPLAY_NAMES: dict[str, str] = {
+    "normal": "Officer Hannah",
+    "enraged": "Officer Hannah (Enraged)",
+    "shadow": "Detective Hannah",
+    "celestial": "Agent Hannah",
+    "mythic": "Chief Hannah",
+    "tomass": "Officer TomAss",
+    "zz_wrath": "Captain ZZ",
+    "freaky_nikki": "Officer Nikki",
+}
 # Street sales: business reputation and district influence boost volatile street prices.
 DRUG_STREET_REPUTATION_BONUS_PER_LEVEL = 0.02  # +2% per reputation level
 DRUG_STREET_INFLUENCE_MAX_BONUS = 0.30  # up to +30% at 100% district influence

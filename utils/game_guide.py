@@ -501,8 +501,11 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "**Selling**\n"
                     "· **Street** (lab panel) — instant sale at a volatile price, boosted by "
                     "**business reputation** (+2%/level) and **district influence** "
-                    f"(up to +{int(config.DRUG_STREET_INFLUENCE_MAX_BONUS * 100)}% at 100% influence), "
-                    f"but a **{int(config.DRUG_RAID_CHANCE * 100)}%** raid risk\n"
+                    f"(up to +{int(config.DRUG_STREET_INFLUENCE_MAX_BONUS * 100)}% at 100% influence). "
+                    f"**{int(config.DRUG_RAID_CHANCE * 100)}%** bust chance spawns a **police boss** "
+                    f"(⅔ raid boss strength) — **fight** or **flee**. "
+                    f"**{int(config.DRUG_COP_ARREST_CHANCE * 100)}%** jail chance on a loss "
+                    f"({config.DRUG_COP_ARREST_SECONDS // 60} min)\n"
                     "· **Black market** (`/drugs market`) — list product for other players or buy "
                     f"theirs ({int(config.DRUG_MARKET_TAX * 100)}% sale tax)",
                     "**Tips**\n"

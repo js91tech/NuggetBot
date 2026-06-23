@@ -9,6 +9,12 @@ import discord
 
 import config
 from utils.drug_art import render_lab_image
+from utils.drug_encounter import (
+    CopEncounterResult,
+    build_cop_encounter_embed,
+    execute_cop_fight,
+    execute_cop_flee,
+)
 from utils.drugs import DRUGS, drug_by_id, format_consume_message, format_street_sale_bonus
 from utils.helpers import fmt_amount
 from utils.quests import record_quest_event
@@ -254,15 +260,32 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
         if qty <= 0:
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
             return
-        result = await self.cog.bot.db.sell_drugs_street(self.user_id, self.guild_id, self.drug_id, qty)
+        max_hp = await player_max_hp(self.cog, self.user_id, self.guild_id)
+        result = await self.cog.bot.db.sell_drugs_street(
+            self.user_id, self.guild_id, self.drug_id, qty, player_max_hp=max_hp,
+        )
         if result.get("error"):
             messages = {
                 "invalid_drug": "Unknown strain.",
                 "invalid_amount": "Enter a valid quantity.",
                 "insufficient_product": "You don't have that much product.",
+                "cop_encounter_active": "You are already in a police bust — finish it first.",
             }
             await interaction.response.send_message(
                 messages.get(str(result["error"]), "Could not sell."), ephemeral=True,
+            )
+            return
+        if result.get("encounter"):
+            encounter = await self.cog.bot.db.get_drug_cop_encounter(self.user_id, self.guild_id)
+            if encounter is None:
+                await interaction.response.send_message("Bust failed to start.", ephemeral=True)
+                return
+            embed, file = await build_cop_encounter_embed(encounter)
+            view = StreetCopEncounterView(self.cog, self.guild_id, self.user_id)
+            await interaction.response.edit_message(
+                embed=embed,
+                attachments=[file] if file is not None else [],
+                view=view,
             )
             return
         await record_quest_event(self.cog.bot.db, self.guild_id, self.user_id, "drug_sell")
@@ -285,6 +308,75 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
                 f"**{fmt_amount(float(result['total']))}**{bonus}."
             )
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
+
+
+class StreetCopEncounterView(discord.ui.View):
+    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int) -> None:
+        super().__init__(timeout=300.0)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("This is not your bust.", ephemeral=True)
+            return False
+        return True
+
+    async def _apply_result(self, interaction: discord.Interaction, result: CopEncounterResult) -> None:
+        if result.error and result.finished:
+            await interaction.response.send_message(result.error, ephemeral=True)
+            return
+        attachments = [result.file] if result.file is not None else []
+        if result.finished:
+            self.stop()
+            if result.record_sale_quest:
+                await record_quest_event(self.cog.bot.db, self.guild_id, self.user_id, "drug_sell")
+            if result.lab_description:
+                lab_embed, lab_file = await build_lab_embed(self.cog, self.guild_id, self.user_id)
+                lab_embed.description = result.lab_description
+                lab_view = await DrugLabView.build(self.cog, self.guild_id, self.user_id)
+                await interaction.response.edit_message(
+                    embed=lab_embed,
+                    attachments=[lab_file],
+                    view=lab_view,
+                )
+                return
+        await interaction.response.edit_message(
+            embed=result.embed,
+            attachments=attachments,
+            view=None if result.finished else self,
+        )
+
+    @discord.ui.button(label="⚔️ Fight", style=discord.ButtonStyle.danger, row=0)
+    async def fight_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        result = await execute_cop_fight(self.cog, self.guild_id, self.user_id)
+        await self._apply_result(interaction, result)
+
+    @discord.ui.button(label="🏃 Flee", style=discord.ButtonStyle.secondary, row=0)
+    async def flee_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        result = await execute_cop_flee(self.cog, self.guild_id, self.user_id)
+        await self._apply_result(interaction, result)
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.primary, row=0)
+    async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        encounter = await self.cog.bot.db.get_drug_cop_encounter(self.user_id, self.guild_id)
+        if encounter is None:
+            lab_embed, lab_file = await build_lab_embed(self.cog, self.guild_id, self.user_id)
+            lab_view = await DrugLabView.build(self.cog, self.guild_id, self.user_id)
+            await interaction.response.edit_message(
+                embed=lab_embed, attachments=[lab_file], view=lab_view,
+            )
+            return
+        embed, file = await build_cop_encounter_embed(encounter)
+        await interaction.response.edit_message(
+            embed=embed,
+            attachments=[file] if file is not None else [],
+            view=self,
+        )
 
 
 class DrugLabView(discord.ui.View):

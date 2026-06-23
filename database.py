@@ -1275,6 +1275,27 @@ class Database:
             )
             """,
         )
+        await self.conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS drug_cop_encounters (
+                encounter_id {pk},
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                drug_id TEXT NOT NULL,
+                inventory_key TEXT NOT NULL,
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                source_variant TEXT NOT NULL,
+                cop_hp REAL NOT NULL,
+                player_hp REAL NOT NULL,
+                player_max_hp REAL NOT NULL,
+                sale_mult REAL NOT NULL DEFAULT 1.0,
+                reputation_level INTEGER NOT NULL DEFAULT 0,
+                influence_pct REAL NOT NULL DEFAULT 0,
+                created_at REAL NOT NULL,
+                UNIQUE (guild_id, user_id)
+            )
+            """,
+        )
         await self.conn.commit()
 
     async def _migrate_crew_banking(self) -> None:
@@ -8316,8 +8337,181 @@ class Database:
             await self.conn.commit()
         return harvested
 
+    async def get_drug_cop_encounter(self, user_id: int, guild_id: int) -> dict[str, object] | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM drug_cop_encounters WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row is not None else None
+
+    async def clear_drug_cop_encounter(self, user_id: int, guild_id: int) -> None:
+        async with self._write_lock:
+            await self.conn.execute(
+                "DELETE FROM drug_cop_encounters WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+            await self.conn.commit()
+
+    async def _finalize_drug_street_sale(
+        self,
+        user_id: int,
+        guild_id: int,
+        drug_id: str,
+        inventory_key: str,
+        quantity: int,
+        *,
+        sale_mult: float,
+        rng: random.Random | None = None,
+    ) -> float:
+        import random as random_mod
+
+        from utils.drugs import drug_by_id, sale_total
+
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            raise ValueError("invalid_drug")
+        total = sale_total(defn, quantity, rng=rng or random_mod, sale_mult=sale_mult)
+        await self.conn.execute(
+            "UPDATE drug_inventory SET quantity = quantity - ? WHERE user_id = ? AND guild_id = ? AND drug_id = ?",
+            (quantity, user_id, guild_id, inventory_key),
+        )
+        await self.conn.execute(
+            "UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ? WHERE user_id = ? AND guild_id = ?",
+            (total, total, user_id, guild_id),
+        )
+        await self.conn.execute(
+            """
+            INSERT INTO drug_transactions (guild_id, user_id, drug_id, quantity, amount, txn_type, created_at)
+            VALUES (?, ?, ?, ?, ?, 'street_sell', ?)
+            """,
+            (guild_id, user_id, defn.drug_id, quantity, total, time.time()),
+        )
+        return total
+
+    async def _lose_drug_street_product(
+        self,
+        user_id: int,
+        guild_id: int,
+        drug_id: str,
+        inventory_key: str,
+        quantity: int,
+        *,
+        lost_fraction: float | None = None,
+        txn_type: str = "raid",
+    ) -> int:
+        from utils.drugs import drug_by_id
+
+        defn = drug_by_id(drug_id)
+        canonical = defn.drug_id if defn is not None else drug_id
+        if lost_fraction is None:
+            lost = quantity
+        else:
+            lost = max(1, int(quantity * lost_fraction))
+        lost = min(lost, quantity)
+        await self.conn.execute(
+            "UPDATE drug_inventory SET quantity = quantity - ? WHERE user_id = ? AND guild_id = ? AND drug_id = ?",
+            (lost, user_id, guild_id, inventory_key),
+        )
+        await self.conn.execute(
+            """
+            INSERT INTO drug_transactions (guild_id, user_id, drug_id, quantity, amount, txn_type, created_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            """,
+            (guild_id, user_id, canonical, lost, txn_type, time.time()),
+        )
+        return lost
+
+    async def start_drug_cop_encounter(
+        self,
+        user_id: int,
+        guild_id: int,
+        drug_id: str,
+        quantity: int,
+        *,
+        player_max_hp: float,
+        sale_mult: float,
+        reputation_level: int,
+        influence_pct: float,
+    ) -> dict[str, object]:
+        import random
+
+        from utils.drugs import drug_by_id
+        from utils.police_bosses import cop_encounter_hp, cop_display_name, pick_cop_variant
+
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            return {"error": "invalid_drug"}
+        if quantity <= 0:
+            return {"error": "invalid_amount"}
+        canonical_id = defn.drug_id
+        source_variant = pick_cop_variant()
+        cop_hp = cop_encounter_hp(source_variant, player_max_hp)
+        now = time.time()
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                "SELECT encounter_id FROM drug_cop_encounters WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+            if await cursor.fetchone() is not None:
+                await self.conn.commit()
+                return {"error": "cop_encounter_active"}
+            stored_id, available = await self._find_drug_inventory_qty(user_id, guild_id, canonical_id)
+            if stored_id is None or available < quantity:
+                await self.conn.commit()
+                return {"error": "insufficient_product"}
+            await self.conn.execute(
+                """
+                INSERT INTO drug_cop_encounters (
+                    guild_id, user_id, drug_id, inventory_key, quantity, source_variant,
+                    cop_hp, player_hp, player_max_hp, sale_mult, reputation_level,
+                    influence_pct, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    guild_id, user_id, canonical_id, stored_id, quantity, source_variant,
+                    cop_hp, player_max_hp, player_max_hp, sale_mult, reputation_level,
+                    influence_pct, now,
+                ),
+            )
+            await self.conn.commit()
+        return {
+            "error": None,
+            "encounter": True,
+            "drug_id": canonical_id,
+            "quantity": quantity,
+            "source_variant": source_variant,
+            "cop_name": cop_display_name(source_variant),
+            "cop_hp": cop_hp,
+            "player_hp": player_max_hp,
+            "player_max_hp": player_max_hp,
+            "sale_multiplier": sale_mult,
+            "reputation_level": reputation_level,
+            "influence_pct": influence_pct,
+        }
+
+    async def update_drug_cop_encounter_hp(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        cop_hp: float,
+        player_hp: float,
+    ) -> None:
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                UPDATE drug_cop_encounters
+                SET cop_hp = ?, player_hp = ?
+                WHERE guild_id = ? AND user_id = ?
+                """,
+                (cop_hp, player_hp, guild_id, user_id),
+            )
+            await self.conn.commit()
+
     async def sell_drugs_street(
         self, user_id: int, guild_id: int, drug_id: str, quantity: int,
+        *, player_max_hp: float | None = None,
     ) -> dict[str, object]:
         """Sell product on the street. Volatile price with a raid risk."""
         import random
@@ -8332,43 +8526,34 @@ class Database:
         canonical_id = defn.drug_id
         sale_breakdown = await self.get_street_sale_breakdown(user_id, guild_id)
         sale_mult = float(sale_breakdown["multiplier"])
+        max_hp = max(float(config.PLAYER_BASE_HP), float(player_max_hp or config.PLAYER_BASE_HP))
         async with self._write_lock:
             stored_id, available = await self._find_drug_inventory_qty(user_id, guild_id, canonical_id)
             if stored_id is None or available < quantity:
                 await self.conn.commit()
                 return {"error": "insufficient_product"}
-            # Raid risk: lose part of the product, no payout.
-            raided = random.random() < config.DRUG_RAID_CHANCE
-            if raided:
-                lost = max(1, int(quantity * config.DRUG_RAID_LOSS_FRACTION))
-                await self.conn.execute(
-                    "UPDATE drug_inventory SET quantity = quantity - ? WHERE user_id = ? AND guild_id = ? AND drug_id = ?",
-                    (lost, user_id, guild_id, stored_id),
-                )
-                await self.conn.execute(
-                    """
-                    INSERT INTO drug_transactions (guild_id, user_id, drug_id, quantity, amount, txn_type, created_at)
-                    VALUES (?, ?, ?, ?, 0, 'raid', ?)
-                    """,
-                    (guild_id, user_id, canonical_id, lost, time.time()),
-                )
+            bust_roll = random.random() < config.DRUG_RAID_CHANCE
+            if bust_roll:
                 await self.conn.commit()
-                return {"error": None, "raided": True, "lost": lost}
+        if bust_roll:
+            return await self.start_drug_cop_encounter(
+                user_id,
+                guild_id,
+                drug_id,
+                quantity,
+                player_max_hp=max_hp,
+                sale_mult=sale_mult,
+                reputation_level=int(sale_breakdown["reputation_level"]),
+                influence_pct=float(sale_breakdown["influence_pct"]),
+            )
+        async with self._write_lock:
+            stored_id, available = await self._find_drug_inventory_qty(user_id, guild_id, canonical_id)
+            if stored_id is None or available < quantity:
+                await self.conn.commit()
+                return {"error": "insufficient_product"}
             total = sale_total(defn, quantity, rng=random, sale_mult=sale_mult)
-            await self.conn.execute(
-                "UPDATE drug_inventory SET quantity = quantity - ? WHERE user_id = ? AND guild_id = ? AND drug_id = ?",
-                (quantity, user_id, guild_id, stored_id),
-            )
-            await self.conn.execute(
-                "UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ? WHERE user_id = ? AND guild_id = ?",
-                (total, total, user_id, guild_id),
-            )
-            await self.conn.execute(
-                """
-                INSERT INTO drug_transactions (guild_id, user_id, drug_id, quantity, amount, txn_type, created_at)
-                VALUES (?, ?, ?, ?, ?, 'street_sell', ?)
-                """,
-                (guild_id, user_id, canonical_id, quantity, total, time.time()),
+            await self._finalize_drug_street_sale(
+                user_id, guild_id, canonical_id, stored_id, quantity, sale_mult=sale_mult, rng=random,
             )
             await self.conn.commit()
         return {
