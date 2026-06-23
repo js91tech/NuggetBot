@@ -38,6 +38,16 @@ async def build_district_embed(
     row = await cog.bot.db.get_business(user_id, guild.id)
     current = str(row["district_id"]) if row is not None and row["district_id"] else None
 
+    # Single query for all influence rows, grouped per district in Python. This
+    # keeps the panel fast (one round trip) even on a remote DB.
+    all_influence = await cog.bot.db.list_all_district_influence(guild.id)
+    per_district: dict[str, list[tuple[str, str, float]]] = {}
+    your_inf = 0.0
+    for district_id, entity_type, entity_id, influence in all_influence:
+        per_district.setdefault(district_id, []).append((entity_type, entity_id, influence))
+        if current and district_id == current and entity_type == "user" and entity_id == str(user_id):
+            your_inf = influence
+
     embed = discord.Embed(
         title="🗺️ Business Districts",
         description=(
@@ -48,7 +58,7 @@ async def build_district_embed(
         color=discord.Color.teal(),
     )
     for defn in DISTRICT_MAP.values():
-        top = await cog.bot.db.list_district_influence(guild.id, defn.district_id, limit=3)
+        top = per_district.get(defn.district_id, [])[:3]
         top_lines = []
         for entity_type, entity_id, influence in top:
             if entity_type == "user":
@@ -68,11 +78,6 @@ async def build_district_embed(
             inline=False,
         )
     if row is not None:
-        your_inf = (
-            await cog.bot.db.get_user_district_influence(user_id, guild.id, current)
-            if current
-            else 0.0
-        )
         loc = district_by_id(current)
         loc_label = f"{loc.emoji} {loc.name}" if loc else "_unassigned (no bonus)_"
         embed.set_footer(

@@ -1,6 +1,7 @@
 """Interactive UI for the Business Empire (panel, collect, tier-up, upgrades)."""
 from __future__ import annotations
 
+import contextlib
 import io
 from typing import TYPE_CHECKING
 
@@ -253,15 +254,21 @@ class BusinessPanelView(discord.ui.View):
             defn = tier_def(new_tier)
             note = f"🏗️ Upgraded to **{defn.name if defn else 'next tier'}**!"
         await _refresh_panel(interaction, self.cog, self.guild_id, self.user_id, note=note)
+        # Explicit ephemeral confirmation so the result is never ambiguous.
+        with contextlib.suppress(discord.HTTPException):
+            await interaction.followup.send(note, ephemeral=True)
 
     @discord.ui.button(label="Districts", style=discord.ButtonStyle.secondary)
     async def districts_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
         from utils.district_ui import DistrictMapView, build_district_payload
 
+        # Defer first: building the district panel runs several DB queries (and may
+        # open an image), which can exceed Discord's 3s ack window on a slow host.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         embed, files = await build_district_payload(self.cog, interaction.guild, self.user_id)
         view = DistrictMapView(self.cog, self.guild_id, self.user_id)
-        await interaction.response.send_message(embed=embed, view=view, files=files, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, files=files, ephemeral=True)
 
     @discord.ui.button(label="Compete", style=discord.ButtonStyle.danger, row=1)
     async def compete_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

@@ -9007,6 +9007,28 @@ class Database:
         row = await cursor.fetchone()
         return float(row["influence"]) if row is not None else 0.0
 
+    async def list_all_district_influence(
+        self, guild_id: int,
+    ) -> list[tuple[str, str, str, float]]:
+        """All influence rows for a guild in one query: (district_id, type, id, influence)."""
+        cursor = await self.conn.execute(
+            """
+            SELECT district_id, entity_type, entity_id, influence FROM district_influence
+            WHERE guild_id = ? AND influence > 0
+            ORDER BY district_id ASC, influence DESC
+            """,
+            (guild_id,),
+        )
+        return [
+            (
+                str(r["district_id"]),
+                str(r["entity_type"]),
+                str(r["entity_id"]),
+                float(r["influence"]),
+            )
+            for r in await cursor.fetchall()
+        ]
+
     async def list_district_influence(
         self, guild_id: int, district_id: str, *, limit: int = 5,
     ) -> list[tuple[str, str, float]]:
