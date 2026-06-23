@@ -8200,6 +8200,28 @@ class Database:
                 return lookup_id, int(row["quantity"])
         return None, 0
 
+    async def get_street_sale_breakdown(self, user_id: int, guild_id: int) -> dict[str, object]:
+        """Reputation and district influence bonuses applied to street drug sales."""
+        from utils.drugs import street_sale_multiplier
+
+        biz = await self.get_business(user_id, guild_id)
+        reputation_level = int(biz["reputation"]) if biz is not None else 0
+        influence_pct = 0.0
+        district_id: str | None = None
+        if biz is not None and biz["district_id"]:
+            district_id = str(biz["district_id"])
+            influence_pct = await self.get_user_district_influence(user_id, guild_id, district_id)
+        multiplier = street_sale_multiplier(
+            reputation_level=reputation_level,
+            influence_pct=influence_pct,
+        )
+        return {
+            "multiplier": multiplier,
+            "reputation_level": reputation_level,
+            "influence_pct": influence_pct,
+            "district_id": district_id,
+        }
+
     async def list_drug_grows(self, user_id: int, guild_id: int) -> list[dict[str, object]]:
         cursor = await self.conn.execute(
             """
@@ -8308,6 +8330,8 @@ class Database:
         if quantity <= 0:
             return {"error": "invalid_amount"}
         canonical_id = defn.drug_id
+        sale_breakdown = await self.get_street_sale_breakdown(user_id, guild_id)
+        sale_mult = float(sale_breakdown["multiplier"])
         async with self._write_lock:
             stored_id, available = await self._find_drug_inventory_qty(user_id, guild_id, canonical_id)
             if stored_id is None or available < quantity:
@@ -8330,7 +8354,7 @@ class Database:
                 )
                 await self.conn.commit()
                 return {"error": None, "raided": True, "lost": lost}
-            total = sale_total(defn, quantity, rng=random)
+            total = sale_total(defn, quantity, rng=random, sale_mult=sale_mult)
             await self.conn.execute(
                 "UPDATE drug_inventory SET quantity = quantity - ? WHERE user_id = ? AND guild_id = ? AND drug_id = ?",
                 (quantity, user_id, guild_id, stored_id),
@@ -8347,7 +8371,15 @@ class Database:
                 (guild_id, user_id, canonical_id, quantity, total, time.time()),
             )
             await self.conn.commit()
-        return {"error": None, "raided": False, "total": total, "quantity": quantity}
+        return {
+            "error": None,
+            "raided": False,
+            "total": total,
+            "quantity": quantity,
+            "sale_multiplier": sale_mult,
+            "reputation_level": sale_breakdown["reputation_level"],
+            "influence_pct": sale_breakdown["influence_pct"],
+        }
 
     async def create_drug_listing(
         self, user_id: int, guild_id: int, drug_id: str, quantity: int, price_per_unit: float,

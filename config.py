@@ -651,6 +651,9 @@ DRUG_RAID_LOSS_FRACTION = 0.5
 DRUG_MARKET_TAX = 0.05
 DRUG_INDUSTRIAL_YIELD_BONUS = 0.20
 DRUG_MAX_LISTING_QTY = 100_000
+# Street sales: business reputation and district influence boost volatile street prices.
+DRUG_STREET_REPUTATION_BONUS_PER_LEVEL = 0.02  # +2% per reputation level
+DRUG_STREET_INFLUENCE_MAX_BONUS = 0.30  # up to +30% at 100% district influence
 
 
 def custom_avatar_max_size_label() -> str:

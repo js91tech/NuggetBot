@@ -176,16 +176,47 @@ def roll_yield(defn: DrugDef, *, yield_bonus: float = 0.0, rng: random.Random | 
     return max(1, int(round(base * (1.0 + max(0.0, yield_bonus)))))
 
 
-def street_price(defn: DrugDef, *, rng: random.Random | None = None) -> float:
+def street_sale_multiplier(*, reputation_level: int = 0, influence_pct: float = 0.0) -> float:
+    """Bonus multiplier for street drug sales from business rep and district influence."""
+    rep_mult = 1.0 + max(0, int(reputation_level)) * config.DRUG_STREET_REPUTATION_BONUS_PER_LEVEL
+    cap = max(1.0, float(config.BUSINESS_DISTRICT_INFLUENCE_MAX))
+    inf_ratio = max(0.0, min(float(influence_pct), cap)) / cap
+    inf_mult = 1.0 + inf_ratio * config.DRUG_STREET_INFLUENCE_MAX_BONUS
+    return rep_mult * inf_mult
+
+
+def street_price(
+    defn: DrugDef,
+    *,
+    rng: random.Random | None = None,
+    sale_mult: float = 1.0,
+) -> float:
     """Current street price with random volatility around the base."""
     r = rng or random
     variance = config.DRUG_STREET_PRICE_VARIANCE
     factor = 1.0 + r.uniform(-variance, variance)
-    return max(1.0, defn.street_price * factor)
+    return max(1.0, defn.street_price * factor * max(1.0, sale_mult))
 
 
-def sale_total(defn: DrugDef, quantity: int, *, rng: random.Random | None = None) -> float:
-    return street_price(defn, rng=rng) * max(0, int(quantity))
+def sale_total(
+    defn: DrugDef,
+    quantity: int,
+    *,
+    rng: random.Random | None = None,
+    sale_mult: float = 1.0,
+) -> float:
+    return street_price(defn, rng=rng, sale_mult=sale_mult) * max(0, int(quantity))
+
+
+def format_street_sale_bonus(sale_mult: float, *, reputation_level: int, influence_pct: float) -> str:
+    if sale_mult <= 1.001:
+        return ""
+    rep_pct = int(max(0, reputation_level) * config.DRUG_STREET_REPUTATION_BONUS_PER_LEVEL * 100)
+    cap = max(1.0, float(config.BUSINESS_DISTRICT_INFLUENCE_MAX))
+    inf_pct = int(
+        max(0.0, min(float(influence_pct), cap)) / cap * config.DRUG_STREET_INFLUENCE_MAX_BONUS * 100,
+    )
+    return f" (×{sale_mult:.2f} — rep +{rep_pct}%, influence +{inf_pct}%)"
 
 
 def format_drug_effect(defn: DrugDef) -> str:

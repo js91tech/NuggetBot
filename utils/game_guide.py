@@ -499,9 +499,10 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· `/drugs use` — consume product from stash",
                     "**Strains**\n" + "\n".join(drug_lines),
                     "**Selling**\n"
-                    "· **Street** (lab panel) — instant sale at a volatile price, but a "
-                    f"**{int(config.DRUG_RAID_CHANCE * 100)}%** chance of a raid that seizes part of "
-                    "your stash\n"
+                    "· **Street** (lab panel) — instant sale at a volatile price, boosted by "
+                    "**business reputation** (+2%/level) and **district influence** "
+                    f"(up to +{int(config.DRUG_STREET_INFLUENCE_MAX_BONUS * 100)}% at 100% influence), "
+                    f"but a **{int(config.DRUG_RAID_CHANCE * 100)}%** raid risk\n"
                     "· **Black market** (`/drugs market`) — list product for other players or buy "
                     f"theirs ({int(config.DRUG_MARKET_TAX * 100)}% sale tax)",
                     "**Tips**\n"
@@ -509,6 +510,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     f"+{int(config.DRUG_INDUSTRIAL_YIELD_BONUS * 100)}%\n"
                     "· Higher-tier strains take longer but pay far more per unit\n"
                     "· **Use** product from your stash for energy, healing, or combat buffs\n"
+                    "· Upgrade **reputation** and build **district influence** for better street prices\n"
                     "· Spread sales to avoid big losses to raids",
                 ],
             ),

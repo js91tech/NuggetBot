@@ -9,7 +9,7 @@ import discord
 
 import config
 from utils.drug_art import render_lab_image
-from utils.drugs import DRUGS, drug_by_id, format_consume_message
+from utils.drugs import DRUGS, drug_by_id, format_consume_message, format_street_sale_bonus
 from utils.helpers import fmt_amount
 from utils.quests import record_quest_event
 
@@ -65,6 +65,8 @@ async def build_lab_embed(
     grows = await cog.bot.db.list_drug_grows(user_id, guild_id)
     inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
     pending_buff = await cog.bot.db.peek_pending_drug_buff(user_id, guild_id)
+    sale_breakdown = await cog.bot.db.get_street_sale_breakdown(user_id, guild_id)
+    sale_mult = float(sale_breakdown["multiplier"])
     now = time.time()
 
     embed = discord.Embed(
@@ -92,6 +94,11 @@ async def build_lab_embed(
         footer = f"{len(grows)}/{config.DRUG_LAB_SLOTS} slots used"
         if ready_count:
             footer += f" · {ready_count} ready"
+        if sale_mult > 1.001:
+            footer += (
+                f" · Street ×{sale_mult:.2f} (rep {sale_breakdown['reputation_level']}, "
+                f"influence {int(float(sale_breakdown['influence_pct']))}%)"
+            )
         embed.add_field(name="Grow slots", value="\n".join(lines), inline=False)
         embed.set_footer(text=footer)
     else:
@@ -100,6 +107,14 @@ async def build_lab_embed(
             value=f"_Empty — plant a strain below ({config.DRUG_LAB_SLOTS} slots)._",
             inline=False,
         )
+        if sale_mult > 1.001:
+            embed.set_footer(
+                text=(
+                    f"Street prices ×{sale_mult:.2f} "
+                    f"(rep {sale_breakdown['reputation_level']}, "
+                    f"influence {int(float(sale_breakdown['influence_pct']))}%)"
+                ),
+            )
 
     if inventory:
         inv_lines = []
@@ -107,7 +122,7 @@ async def build_lab_embed(
             defn = drug_by_id(drug_id)
             name = defn.name if defn else drug_id
             emoji = defn.emoji if defn else "📦"
-            price = defn.street_price if defn else 0
+            price = defn.street_price * sale_mult if defn else 0
             effect = f" · _{defn.effect_summary}_" if defn else ""
             inv_lines.append(f"{emoji} **{name}** ×{qty} · ~{fmt_amount(price)}/unit{effect}")
         embed.add_field(name="Stash", value="\n".join(inv_lines), inline=False)
@@ -260,9 +275,14 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
                 f"🚨 **Raided!** Lost **{int(result['lost'])} {name}** in a bust. No payout."
             )
         else:
+            bonus = format_street_sale_bonus(
+                float(result.get("sale_multiplier") or 1.0),
+                reputation_level=int(result.get("reputation_level") or 0),
+                influence_pct=float(result.get("influence_pct") or 0),
+            )
             embed.description = (
                 f"💵 Sold **{int(result['quantity'])} {name}** on the street for "
-                f"**{fmt_amount(float(result['total']))}**."
+                f"**{fmt_amount(float(result['total']))}**{bonus}."
             )
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
 
@@ -525,6 +545,8 @@ async def build_stash_embed(
 ) -> discord.Embed:
     inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
     pending_buff = await cog.bot.db.peek_pending_drug_buff(user_id, guild_id)
+    sale_breakdown = await cog.bot.db.get_street_sale_breakdown(user_id, guild_id)
+    sale_mult = float(sale_breakdown["multiplier"])
     embed = discord.Embed(
         title="📦 Your Stash",
         description="_Product ready to sell, trade, or use._",
@@ -536,8 +558,9 @@ async def build_stash_embed(
             defn = drug_by_id(drug_id)
             name = defn.name if defn else drug_id
             emoji = defn.emoji if defn else "📦"
+            price_note = f" · ~{fmt_amount(defn.street_price * sale_mult)}/unit street" if defn else ""
             effect = f" — _{defn.effect_summary}_" if defn else ""
-            lines.append(f"{emoji} **{name}** ×{qty}{effect}")
+            lines.append(f"{emoji} **{name}** ×{qty}{price_note}{effect}")
         embed.add_field(name="Inventory", value="\n".join(lines), inline=False)
     else:
         embed.add_field(name="Inventory", value="_Empty — harvest from /drugs lab._", inline=False)
@@ -556,6 +579,14 @@ async def build_stash_embed(
                 f"· expires <t:{int(float(pending_buff['expires']))}:R>"
             ),
             inline=False,
+        )
+    if sale_mult > 1.001:
+        embed.set_footer(
+            text=(
+                f"Street prices ×{sale_mult:.2f} "
+                f"(rep {sale_breakdown['reputation_level']}, "
+                f"influence {int(float(sale_breakdown['influence_pct']))}%)"
+            ),
         )
     return embed
 

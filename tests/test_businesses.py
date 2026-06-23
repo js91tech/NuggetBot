@@ -27,7 +27,7 @@ from utils.businesses import (
     upgrade_income_delta,
 )
 from utils.districts import DISTRICT_MAP, district_income_mult
-from utils.drugs import DRUGS, drug_by_id, roll_yield
+from utils.drugs import DRUGS, drug_by_id, roll_yield, street_sale_multiplier
 from utils.mega_projects import MEGA_PROJECTS, income_bonus_from_completed
 from utils.stock_market import sell_proceeds, share_price
 
@@ -656,6 +656,11 @@ class DrugMathTests(unittest.TestCase):
         bonus = roll_yield(defn, yield_bonus=1.0, rng=rng)
         self.assertGreaterEqual(bonus, base)
 
+    def test_street_sale_multiplier(self) -> None:
+        self.assertEqual(street_sale_multiplier(), 1.0)
+        boosted = street_sale_multiplier(reputation_level=10, influence_pct=100.0)
+        self.assertAlmostEqual(boosted, 1.2 * 1.3, places=4)
+
 
 class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -742,6 +747,37 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.ensure_user(uid, guild_id)
         result = await self.db.sell_drugs_street(uid, guild_id, "blue_dream", 5)
         self.assertEqual(result["error"], "insufficient_product")
+
+    async def test_street_sale_rep_influence_bonus(self) -> None:
+        guild_id, uid = 1, 100
+        await self.db.ensure_user(uid, guild_id)
+        await self.db.credit_wallet(uid, guild_id, 100_000.0, apply_bonuses=False)
+        self.assertIsNone(await self.db.create_business(uid, guild_id))
+        async with self.db._write_lock:
+            await self.db.conn.execute(
+                """
+                UPDATE user_businesses SET reputation = 5, district_id = 'downtown'
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (uid, guild_id),
+            )
+            await self.db.conn.commit()
+        await self.db.add_district_influence(guild_id, "downtown", "user", str(uid), 50.0)
+        breakdown = await self.db.get_street_sale_breakdown(uid, guild_id)
+        self.assertEqual(breakdown["reputation_level"], 5)
+        self.assertEqual(float(breakdown["influence_pct"]), 50.0)
+        self.assertGreater(float(breakdown["multiplier"]), 1.0)
+        await self._stock_product(uid, guild_id, "blue_dream", 5)
+        import config as cfg
+
+        old = cfg.DRUG_RAID_CHANCE
+        cfg.DRUG_RAID_CHANCE = 0.0
+        try:
+            result = await self.db.sell_drugs_street(uid, guild_id, "blue_dream", 1)
+        finally:
+            cfg.DRUG_RAID_CHANCE = old
+        self.assertIsNone(result["error"])
+        self.assertGreater(float(result["sale_multiplier"]), 1.0)
 
     async def test_consume_drug(self) -> None:
         guild_id, uid = 1, 100
