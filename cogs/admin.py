@@ -70,7 +70,7 @@ class Admin(commands.Cog):
         embed.set_footer(text="Use /config setting value to change one, or /config-reset setting.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="gift", description="Admin only: give nuggets to a user.")
+    @app_commands.command(name="grant", description="Admin only: give nuggets to a user.")
     @app_commands.describe(user="User to receive nuggets", amount="Amount to create")
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(administrator=True)
@@ -96,7 +96,7 @@ class Admin(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @app_commands.command(name="gift-all", description="Admin only: give nuggets to every human.")
+    @app_commands.command(name="grant-all", description="Admin only: give nuggets to every human.")
     @app_commands.describe(amount="Amount each human receives")
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(administrator=True)

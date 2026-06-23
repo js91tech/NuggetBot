@@ -210,8 +210,8 @@ All dashboard commands require Discord administrator permission.
 
 | Command | Description |
 |---------|-------------|
-| `/gift @user amount` | Give nuggets to one user from thin air |
-| `/gift-all amount` | Give nuggets to every human in the server |
+| `/grant @user amount` | Give nuggets to one user from thin air |
+| `/grant-all amount` | Give nuggets to every human in the server |
 | `/set-currency @user amount` | Set a user's wallet to an exact amount |
 | `/reset-user @user` | Wipe a user's wallet and stats |
 | `/config` | View all live tuneable settings |
