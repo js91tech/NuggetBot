@@ -194,7 +194,9 @@ async def send_stock_panel(interaction: discord.Interaction, cog: commands.Cog) 
     if interaction.guild is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     view = StockMarketView(cog, interaction.guild.id, interaction.user.id)
     await view.populate()
     embed = await build_market_embed(cog, interaction.guild, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=view)

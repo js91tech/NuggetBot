@@ -382,15 +382,19 @@ async def send_drug_lab_panel(interaction: discord.Interaction, cog: commands.Co
     if interaction.guild_id is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     embed, file = await build_lab_embed(cog, interaction.guild_id, interaction.user.id)
     view = await DrugLabView.build(cog, interaction.guild_id, interaction.user.id)
-    await interaction.response.send_message(embed=embed, file=file, view=view)
+    await interaction.followup.send(embed=embed, file=file, view=view)
 
 
 async def send_drug_market_panel(interaction: discord.Interaction, cog: commands.Cog) -> None:
     if interaction.guild is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     embed = await build_drug_market_embed(cog, interaction.guild, interaction.user.id)
     view = await DrugMarketView.build(cog, interaction.guild.id, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=view)

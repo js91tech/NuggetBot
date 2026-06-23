@@ -239,6 +239,8 @@ async def send_district_panel(interaction: discord.Interaction, cog: commands.Co
     if guild is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     embed, files = await build_district_payload(cog, guild, interaction.user.id)
     view = DistrictMapView(cog, guild.id, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view, files=files)
+    await interaction.followup.send(embed=embed, view=view, files=files)

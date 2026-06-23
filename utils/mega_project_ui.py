@@ -137,6 +137,8 @@ async def send_mega_project_panel(interaction: discord.Interaction, cog: command
     if interaction.guild_id is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     embed = await build_mega_embed(cog, interaction.guild_id, interaction.user.id)
     view = MegaProjectView(cog, interaction.guild_id, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=view)

@@ -38,16 +38,20 @@ class Business(commands.Cog):
         if guild_id is None or not isinstance(member, discord.Member):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
+        # Defer first: building the panel reads the DB and renders an image, which
+        # can exceed Discord's 3s ack window on a cold/constrained host.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         payload = await build_business_payload(self, member, guild_id, member.id)
         if payload is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You don't own a business yet. Use **/business create** to start "
                 f"with a Lemon Stand ({fmt_amount(tier_def(1).purchase_cost)}).",
                 ephemeral=True,
             )
             return
         embed, files, view = payload
-        await interaction.response.send_message(embed=embed, files=files, view=view)
+        await interaction.followup.send(embed=embed, files=files, view=view)
 
     @business_group.command(name="create", description="Open your first business (a Lemon Stand).")
     async def create(self, interaction: discord.Interaction) -> None:

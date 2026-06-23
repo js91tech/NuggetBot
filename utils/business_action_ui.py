@@ -249,5 +249,7 @@ async def send_action_panel(interaction: discord.Interaction, cog: commands.Cog)
     if interaction.guild_id is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     view = BusinessActionView(cog, interaction.guild_id, interaction.user.id)
-    await interaction.response.send_message(embed=build_action_embed(), view=view, ephemeral=True)
+    await interaction.followup.send(embed=build_action_embed(), view=view, ephemeral=True)
