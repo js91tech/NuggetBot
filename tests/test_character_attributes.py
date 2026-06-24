@@ -14,6 +14,7 @@ from utils.character_attributes import (
     attribute_points_from_class_xp,
     combat_bonuses_from_attributes,
     debuff_resistance_from_attributes,
+    resolve_downed_duration,
     stat_cap_for_prestige,
     total_point_pool_cap,
     unspent_attribute_points,
@@ -62,6 +63,10 @@ class CharacterAttributeUtilTests(unittest.TestCase):
         reduced = apply_cc_duration(20.0, high_resist)
         self.assertLess(reduced, 20.0)
         self.assertGreaterEqual(reduced, config.ATTR_MIN_DEBUFF_SECONDS)
+
+    def test_resolve_downed_duration_caps_legacy_config(self) -> None:
+        attrs = CharacterAttributes()
+        self.assertEqual(resolve_downed_duration(120.0, attrs), 30.0)
 
     def test_def_boosts_mitigation_and_dot_resist(self) -> None:
         attrs = CharacterAttributes(defense=12)

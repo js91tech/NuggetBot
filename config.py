@@ -225,7 +225,6 @@ BOSS_UNARMED_MIN = 1
 BOSS_UNARMED_MAX = 15
 PLAYER_ATTACK_CRIT_MULTIPLIER = 2.0
 PLAYER_BASE_CRIT_CHANCE = 0.03
-BOSS_DOWN_SECONDS = 2 * 60
 # Paid /summon (dashboard spawns skip cost and summoner penalties).
 SUMMON_COST = 20_000.0
 # Summoner penalties while their summoned boss is active (retention = 1 - debuff%).
@@ -324,6 +323,7 @@ BOSS_ELEMENT_BEATS: dict[str, str] = {
 
 # Elemental counter procs (applied when the boss lands a counter on a raider).
 BOSS_DEBUFF_MAX_SECONDS = 30.0
+BOSS_DOWN_SECONDS = int(BOSS_DEBUFF_MAX_SECONDS)
 BOSS_DEBUFF_DURATION_BASE_SECONDS = (6, 10)
 BOSS_DEBUFF_DURATION_PER_TIER_SECONDS = (0, 1)
 BOSS_DEBUFF_ATTACK_COOLDOWN_SECONDS = (2, 3)
@@ -737,7 +737,13 @@ LIVE_SETTINGS: dict[str, LiveSetting] = {
         integer=True,
     ),
     "boss_health_scale_factor": LiveSetting(BOSS_CIRCULATION_HP_FACTOR, "Boss HP scaling"),
-    "boss_downed_seconds": LiveSetting(BOSS_DOWN_SECONDS, "Boss downed duration", minimum=1, integer=True),
+    "boss_downed_seconds": LiveSetting(
+        BOSS_DOWN_SECONDS,
+        "Boss downed duration (max 30s; AGI reduces further)",
+        minimum=1,
+        maximum=BOSS_DEBUFF_MAX_SECONDS,
+        integer=True,
+    ),
     "imposter_chance": LiveSetting(IMPOSTER_CHANCE, "Per-message sabotage chance", maximum=1.0),
     "trivia_reward": LiveSetting(TRIVIA_REWARD, "Trivia answer reward"),
     "boss_inferior_drop_chance": LiveSetting(

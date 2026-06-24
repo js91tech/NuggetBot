@@ -9,6 +9,7 @@ import discord
 
 import config
 from utils.drug_art import render_lab_image
+from utils.fertilizer import FERTILIZERS, fertilizer_by_id
 from utils.drugs import (
     DRUGS,
     DRUG_CATEGORY_LABELS,
@@ -93,11 +94,13 @@ async def build_lab_embed(
             name = defn.name if defn else str(g["drug_id"])
             emoji = defn.emoji if defn else "🌱"
             ready_at = float(g["ready_at"])
+            yield_mult = float(g.get("yield_mult") or 1.0)
+            fert_note = f" · **{yield_mult:g}×** yield" if yield_mult > 1.0 else ""
             if ready_at <= now:
-                lines.append(f"{emoji} **{name}** — ✅ ready to harvest")
+                lines.append(f"{emoji} **{name}** — ✅ ready to harvest{fert_note}")
                 ready_count += 1
             else:
-                lines.append(f"{emoji} **{name}** — ready <t:{int(ready_at)}:R>")
+                lines.append(f"{emoji} **{name}** — ready <t:{int(ready_at)}:R>{fert_note}")
         footer = f"{len(grows)}/{config.DRUG_LAB_SLOTS} slots used"
         if ready_count:
             footer += f" · {ready_count} ready"
@@ -210,13 +213,77 @@ class PlantSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
 
 
+class FertilizeSelect(discord.ui.Select):
+    def __init__(
+        self,
+        cog: commands.Cog,
+        guild_id: int,
+        user_id: int,
+        grows: list[dict[str, object]],
+        fert_counts: dict[str, int],
+    ) -> None:
+        self.cog = cog
+        self.guild_id = guild_id
+        self.user_id = user_id
+        options: list[discord.SelectOption] = []
+        for g in grows:
+            if float(g.get("yield_mult") or 1.0) > 1.0:
+                continue
+            defn = drug_by_id(str(g["drug_id"]))
+            grow_name = defn.name if defn else str(g["drug_id"])
+            grow_id = int(g["grow_id"])
+            for fert in FERTILIZERS:
+                if fert_counts.get(fert.item_id, 0) <= 0:
+                    continue
+                options.append(
+                    discord.SelectOption(
+                        label=f"{fert.name} → {grow_name}"[:100],
+                        value=f"{grow_id}:{fert.item_id}",
+                        description=(
+                            f"{fert.yield_mult:g}× yield · "
+                            f"{int((1 - fert.grow_time_mult) * 100)}% faster"
+                        )[:100],
+                        emoji=fert.emoji,
+                    ),
+                )
+        super().__init__(
+            placeholder="Apply fertilizer to a crop…",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            disabled=not options,
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        grow_id_str, fert_id = self.values[0].split(":", 1)
+        err = await self.cog.bot.db.apply_fertilizer_to_grow(
+            self.user_id, self.guild_id, int(grow_id_str), fert_id,
+        )
+        messages = {
+            "invalid_fertilizer": "Unknown fertilizer.",
+            "no_fertilizer": "You do not have that fertilizer — buy from `/shop`.",
+            "invalid_grow": "That crop is gone.",
+            "already_fertilized": "That crop already has fertilizer applied.",
+        }
+        if err:
+            await interaction.response.send_message(messages.get(err, err), ephemeral=True)
+            return
+        fert = fertilizer_by_id(fert_id)
+        view = await DrugLabView.build(self.cog, self.guild_id, self.user_id)
+        embed, file = await build_lab_embed(self.cog, self.guild_id, self.user_id)
+        name = fert.name if fert else "Fertilizer"
+        embed.description = f"{fert.emoji if fert else '🧪'} Applied **{name}** — faster grow and bigger harvest!"
+        await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
+
+
 class UseSelect(discord.ui.Select):
     def __init__(self, cog: commands.Cog, guild_id: int, user_id: int, options: list[discord.SelectOption]) -> None:
         super().__init__(
             placeholder="Use product (consume for effects)…",
             options=options or [discord.SelectOption(label="Empty stash", value="_none")],
             disabled=not options,
-            row=2,
+            row=3,
         )
         self.cog = cog
         self.guild_id = guild_id
@@ -340,6 +407,13 @@ class DrugLabView(discord.ui.View):
         inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
         options = stash_select_options(inventory)
         view.add_item(SellSelect(cog, guild_id, user_id, options))
+        grows = await cog.bot.db.list_drug_grows(user_id, guild_id)
+        fert_counts: dict[str, int] = {}
+        for fert in FERTILIZERS:
+            fert_counts[fert.item_id] = await cog.bot.db.get_inventory_quantity(
+                user_id, guild_id, fert.item_id,
+            )
+        view.add_item(FertilizeSelect(cog, guild_id, user_id, grows, fert_counts))
         view.add_item(UseSelect(cog, guild_id, user_id, options))
         return view
 
@@ -349,7 +423,7 @@ class DrugLabView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="🌾 Harvest", style=discord.ButtonStyle.success, row=3)
+    @discord.ui.button(label="🌾 Harvest", style=discord.ButtonStyle.success, row=4)
     async def harvest_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
         harvested = await self.cog.bot.db.harvest_drugs(self.user_id, self.guild_id)

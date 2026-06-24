@@ -7,7 +7,13 @@ import discord
 
 import config
 from items import HP_POTION_HEAL, HP_POTION_IDS, get_item
-from utils.helpers import fmt_amount
+from utils.consumables_ui import (
+    BOSS_SHOP_USE_IDS,
+    build_use_embed,
+    execute_use,
+    list_boss_useable_entries,
+    use_error_message,
+)
 from utils.skills import skills_for_class
 from utils.spell_cast import cast_skill_for_user
 
@@ -326,30 +332,22 @@ class BossFightView(discord.ui.View):
     @discord.ui.button(label="💊 Items", style=discord.ButtonStyle.secondary, row=1)
     async def items_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
-        raid_ids = {"raid_potion"}
-        usable = raid_ids | set(HP_POTION_IDS)
-        rows = await self.cog.bot.db.get_inventory(self.user_id, self.guild_id)
-        options: list[discord.SelectOption] = []
-        for row in rows:
-            item_id = str(row["item_id"])
-            if item_id not in usable:
-                continue
-            item = get_item(item_id)
-            if item is None:
-                continue
-            options.append(
-                discord.SelectOption(
-                    label=f"{item.name} x{int(row['quantity'])}"[:100],
-                    value=item_id,
-                ),
-            )
-        if not options:
+        entries = await list_boss_useable_entries(self.cog, self.user_id, self.guild_id)
+        if not entries:
             await interaction.response.send_message(
-                "No raid consumables in inventory (Raid Potion or HP potions).",
+                "No raid consumables or stash drugs — buy from `/shop` or harvest from `/drugs lab`.",
                 ephemeral=True,
             )
             return
-        select = discord.ui.Select(placeholder="Use a consumable", options=options[:25])
+        options = [
+            discord.SelectOption(
+                label=f"{label} ×{qty}"[:100],
+                value=entry_id,
+                description="Use one"[:100],
+            )
+            for entry_id, label, qty in entries[:25]
+        ]
+        select = discord.ui.Select(placeholder="Use consumable or drug…", options=options)
 
         async def use_callback(sel_interaction: discord.Interaction) -> None:
             if sel_interaction.user.id != self.user_id:
@@ -357,54 +355,26 @@ class BossFightView(discord.ui.View):
                     "This panel is not yours.", ephemeral=True,
                 )
                 return
-            item_id = select.values[0]
-            qty = await self.cog.bot.db.get_inventory_quantity(
-                self.user_id, self.guild_id, item_id,
+            await sel_interaction.response.defer(ephemeral=True)
+            err, message = await execute_use(
+                self.cog,
+                self.user_id,
+                self.guild_id,
+                select.values[0],
+                shop_ids=BOSS_SHOP_USE_IDS,
             )
-            if qty <= 0:
-                await sel_interaction.response.send_message(
-                    "You do not have that item.", ephemeral=True,
-                )
+            if err:
+                await sel_interaction.followup.send(use_error_message(err), ephemeral=True)
                 return
-            item = get_item(item_id)
-            if item is None:
-                await sel_interaction.response.send_message("Unknown item.", ephemeral=True)
-                return
-            if not await self.cog.bot.db.consume_inventory_item(
-                self.user_id, self.guild_id, item_id,
-            ):
-                await sel_interaction.response.send_message(
-                    "Could not consume item.", ephemeral=True,
-                )
-                return
-            if item_id == "raid_potion":
-                await self.cog.bot.db.set_pending_consumable(
-                    self.user_id, self.guild_id, item_id,
-                )
-                await sel_interaction.response.send_message(
-                    f"Used **{item.name}** — next attack deals **+20%** damage.",
-                    ephemeral=True,
-                )
-                return
-            if item_id in HP_POTION_HEAL:
-                max_hp = await self.cog._max_hp(self.user_id, self.guild_id)
-                heal_amt = float(HP_POTION_HEAL[item_id])
-                new_hp, _ = await self.cog.bot.db.heal_player(
-                    self.user_id, self.guild_id, heal_amt, max_hp,
-                )
-                await sel_interaction.response.send_message(
-                    f"Used **{item.name}** — restored HP to **{int(new_hp)}/{int(max_hp)}**.",
-                    ephemeral=True,
-                )
-                return
-            await sel_interaction.response.send_message("Item used.", ephemeral=True)
+            await sel_interaction.followup.send(message or "Used.", ephemeral=True)
 
         select.callback = use_callback
         view = discord.ui.View(timeout=120.0)
         view.add_item(select)
-        await interaction.response.send_message(
-            "Select a consumable:", view=view, ephemeral=True,
-        )
+        embed = await build_use_embed(self.cog, self.user_id, self.guild_id)
+        embed.title = "💊 Raid consumables"
+        embed.set_footer(text="Raid potions buff your next strike · drugs have timed raid effects")
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(label="❤️ Heal", style=discord.ButtonStyle.success, row=1)
     async def heal_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

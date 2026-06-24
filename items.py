@@ -424,6 +424,25 @@ PICK_KEY = ShopItem(
     shop_listed=True,
 )
 
+FERTILIZER = ShopItem(
+    "fertilizer",
+    "Fertilizer",
+    "consumable",
+    10_000,
+    0,
+    "Apply in /drugs lab: **1.5×** harvest yield and **25%** shorter grow time (one use per crop).",
+    shop_listed=True,
+)
+XL_FERTILIZER = ShopItem(
+    "xl_fertilizer",
+    "XL Fertilizer",
+    "consumable",
+    20_000,
+    0,
+    "Apply in /drugs lab: **2×** harvest yield and **half** the grow wait (one use per crop).",
+    shop_listed=True,
+)
+
 ALCHEMY_SCRAP = ShopItem(
     "alchemy_scrap",
     "Alchemy Scrap",
@@ -538,6 +557,8 @@ CONSUMABLES: tuple[ShopItem, ...] = (
     CHIA_SEEDS,
     JAIL_KEY,
     PICK_KEY,
+    FERTILIZER,
+    XL_FERTILIZER,
     ALCHEMY_SCRAP,
     VOID_HARDENER,
     CELESTIAL_SHARD,

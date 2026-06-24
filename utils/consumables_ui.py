@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING
 import discord
 
 import config
-from items import CONSUMABLE_USE_IDS, HP_POTION_HEAL, get_item
+from items import CONSUMABLE_USE_IDS, HP_POTION_HEAL, HP_POTION_IDS, get_item
 from utils.drugs import drug_by_id, format_consume_message
+from utils.fertilizer import FERTILIZER_IDS
 from utils.player_combat import player_max_hp
 from utils.quests import record_quest_event
 
@@ -25,20 +26,41 @@ _SHOP_USE_SKIP: frozenset[str] = frozenset({
     "void_hardener",
     "celestial_shard",
     "chia_seeds",
+    "fertilizer",
+    "xl_fertilizer",
 })
 
-SHOP_USE_IDS: frozenset[str] = CONSUMABLE_USE_IDS - _SHOP_USE_SKIP
+SHOP_USE_IDS: frozenset[str] = CONSUMABLE_USE_IDS - _SHOP_USE_SKIP - FERTILIZER_IDS
+
+BOSS_SHOP_USE_IDS: frozenset[str] = frozenset({"raid_potion"}) | HP_POTION_IDS
 
 
 async def list_useable_entries(
     cog: commands.Cog, user_id: int, guild_id: int,
 ) -> list[tuple[str, str, int]]:
     """Return (entry_id, label, quantity) for shop items and stash drugs."""
+    return await _collect_useable_entries(cog, user_id, guild_id, shop_ids=SHOP_USE_IDS)
+
+
+async def list_boss_useable_entries(
+    cog: commands.Cog, user_id: int, guild_id: int,
+) -> list[tuple[str, str, int]]:
+    """Raid panel: HP potions, raid potion, and all stash drugs."""
+    return await _collect_useable_entries(cog, user_id, guild_id, shop_ids=BOSS_SHOP_USE_IDS)
+
+
+async def _collect_useable_entries(
+    cog: commands.Cog,
+    user_id: int,
+    guild_id: int,
+    *,
+    shop_ids: frozenset[str],
+) -> list[tuple[str, str, int]]:
     entries: list[tuple[str, str, int]] = []
     rows = await cog.bot.db.get_inventory(user_id, guild_id)
     for row in rows:
         item_id = str(row["item_id"])
-        if item_id not in SHOP_USE_IDS:
+        if item_id not in shop_ids:
             continue
         item = get_item(item_id)
         if item is None:
@@ -64,8 +86,11 @@ async def execute_use(
     user_id: int,
     guild_id: int,
     entry_id: str,
+    *,
+    shop_ids: frozenset[str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Use one shop consumable or drug. Returns (error_code, success_message)."""
+    allowed_shop = shop_ids or SHOP_USE_IDS
     item_id = entry_id.strip().lower()
     if not item_id:
         return "invalid_item", None
@@ -82,7 +107,7 @@ async def execute_use(
         return None, format_consume_message(result)
 
     shop_item = get_item(item_id)
-    if shop_item is None or item_id not in SHOP_USE_IDS:
+    if shop_item is None or item_id not in allowed_shop:
         return "invalid_item", None
     qty = await cog.bot.db.get_inventory_quantity(user_id, guild_id, item_id)
     if qty <= 0:

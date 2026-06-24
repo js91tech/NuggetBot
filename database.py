@@ -493,6 +493,8 @@ class Database:
         await self._migrate_stock_market()
         await self._migrate_mega_projects()
         await self._migrate_drug_trade()
+        await self._migrate_active_drug_buff()
+        await self._migrate_drug_grow_fertilizer()
 
     async def _migrate_character_attributes(self) -> None:
         import config
@@ -1275,6 +1277,83 @@ class Database:
             )
             """,
         )
+        await self.conn.commit()
+
+    async def _migrate_active_drug_buff(self) -> None:
+        """Dedicated columns for timed drug highs (separate from shop pending consumables)."""
+        from utils.drugs import DRUG_BUFF_PREFIX
+
+        cols = [
+            ("active_drug_buff", "TEXT"),
+            ("active_drug_buff_expires", "REAL"),
+        ]
+        if self.is_postgres:
+            for col, typedef in cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'user_character' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_character ADD COLUMN {col} {typedef}",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(user_character)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_character ADD COLUMN {col} {typedef}",
+                    )
+        prefix = f"{DRUG_BUFF_PREFIX}%"
+        await self.conn.execute(
+            """
+            UPDATE user_character
+            SET active_drug_buff = pending_consumable,
+                active_drug_buff_expires = pending_consumable_expires
+            WHERE pending_consumable LIKE ?
+              AND (active_drug_buff IS NULL OR active_drug_buff = '')
+            """,
+            (prefix,),
+        )
+        await self.conn.execute(
+            """
+            UPDATE user_character
+            SET pending_consumable = NULL, pending_consumable_expires = NULL
+            WHERE pending_consumable LIKE ?
+            """,
+            (prefix,),
+        )
+        await self.conn.commit()
+
+    async def _migrate_drug_grow_fertilizer(self) -> None:
+        cols = [("yield_mult", "REAL NOT NULL DEFAULT 1.0")]
+        if self.is_postgres:
+            for col, typedef in cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'drug_grows' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE drug_grows ADD COLUMN {col} {typedef}",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(drug_grows)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE drug_grows ADD COLUMN {col} {typedef}",
+                    )
         await self.conn.commit()
 
     async def _migrate_crew_banking(self) -> None:
@@ -4988,6 +5067,21 @@ class Database:
             )
             await self.conn.commit()
 
+    async def clear_boss_raider_cc_debuffs(self, guild_id: int, user_id: int) -> None:
+        """Clear chill/root attack pacing while opioid CC immunity is active."""
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                UPDATE boss_raider_status
+                SET attack_slow_until = 0,
+                    verdant_root_until = 0,
+                    debuff_attack_cooldown = 0
+                WHERE guild_id = ? AND user_id = ?
+                """,
+                (guild_id, user_id),
+            )
+            await self.conn.commit()
+
     async def get_boss_raider_status(
         self,
         guild_id: int,
@@ -8314,25 +8408,52 @@ class Database:
     async def list_drug_grows(self, user_id: int, guild_id: int) -> list[dict[str, object]]:
         cursor = await self.conn.execute(
             """
-            SELECT grow_id, drug_id, planted_at, ready_at FROM drug_grows
+            SELECT grow_id, drug_id, planted_at, ready_at, yield_mult FROM drug_grows
             WHERE user_id = ? AND guild_id = ?
             ORDER BY ready_at ASC
             """,
             (user_id, guild_id),
         )
-        return [dict(r) for r in await cursor.fetchall()]
+        rows: list[dict[str, object]] = []
+        for r in await cursor.fetchall():
+            row = dict(r)
+            try:
+                row["yield_mult"] = float(row.get("yield_mult") or 1.0)
+            except (TypeError, ValueError):
+                row["yield_mult"] = 1.0
+            rows.append(row)
+        return rows
 
     async def plant_drug(
-        self, user_id: int, guild_id: int, drug_id: str,
+        self,
+        user_id: int,
+        guild_id: int,
+        drug_id: str,
+        *,
+        fertilizer_id: str | None = None,
     ) -> tuple[float, str | None]:
         """Plant a strain in a free lab slot. Returns (seed_cost, error)."""
         from utils.drugs import drug_by_id
+        from utils.fertilizer import fertilizer_by_id
 
         defn = drug_by_id(drug_id)
         if defn is None:
             return 0.0, "invalid_drug"
+        fert = fertilizer_by_id(fertilizer_id) if fertilizer_id else None
+        if fertilizer_id and fert is None:
+            return 0.0, "invalid_fertilizer"
+        grow_seconds = float(defn.grow_seconds)
+        yield_mult = 1.0
+        if fert is not None:
+            grow_seconds *= fert.grow_time_mult
+            yield_mult = fert.yield_mult
         now = time.time()
         async with self._write_lock:
+            if fert is not None:
+                qty = await self._inventory_qty_unlocked(user_id, guild_id, fert.item_id)
+                if qty < 1:
+                    await self.conn.commit()
+                    return defn.seed_cost, "no_fertilizer"
             cursor = await self.conn.execute(
                 "SELECT COUNT(*) AS c FROM drug_grows WHERE user_id = ? AND guild_id = ?",
                 (user_id, guild_id),
@@ -8354,15 +8475,88 @@ class Database:
                 "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
                 (defn.seed_cost, user_id, guild_id),
             )
+            if fert is not None:
+                await self.conn.execute(
+                    """
+                    UPDATE inventory
+                    SET quantity = quantity - 1
+                    WHERE user_id = ? AND guild_id = ? AND item_id = ? AND quantity > 0
+                    """,
+                    (user_id, guild_id, fert.item_id),
+                )
             await self.conn.execute(
                 """
-                INSERT INTO drug_grows (user_id, guild_id, drug_id, planted_at, ready_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO drug_grows (user_id, guild_id, drug_id, planted_at, ready_at, yield_mult)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, guild_id, defn.drug_id, now, now + defn.grow_seconds),
+                (user_id, guild_id, defn.drug_id, now, now + grow_seconds, yield_mult),
             )
             await self.conn.commit()
         return defn.seed_cost, None
+
+    async def apply_fertilizer_to_grow(
+        self,
+        user_id: int,
+        guild_id: int,
+        grow_id: int,
+        fertilizer_id: str,
+    ) -> str | None:
+        """Apply shop fertilizer to an in-progress crop. Returns error code or None."""
+        from utils.fertilizer import fertilizer_by_id
+
+        fert = fertilizer_by_id(fertilizer_id)
+        if fert is None:
+            return "invalid_fertilizer"
+        now = time.time()
+        async with self._write_lock:
+            qty = await self._inventory_qty_unlocked(user_id, guild_id, fert.item_id)
+            if qty < 1:
+                await self.conn.commit()
+                return "no_fertilizer"
+            cursor = await self.conn.execute(
+                """
+                SELECT grow_id, ready_at, yield_mult FROM drug_grows
+                WHERE grow_id = ? AND user_id = ? AND guild_id = ?
+                """,
+                (grow_id, user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await self.conn.commit()
+                return "invalid_grow"
+            current_mult = float(row["yield_mult"] or 1.0)
+            if current_mult > 1.0:
+                await self.conn.commit()
+                return "already_fertilized"
+            ready_at = float(row["ready_at"])
+            remaining = max(0.0, ready_at - now)
+            new_ready = now + remaining * fert.grow_time_mult
+            await self.conn.execute(
+                """
+                UPDATE inventory
+                SET quantity = quantity - 1
+                WHERE user_id = ? AND guild_id = ? AND item_id = ? AND quantity > 0
+                """,
+                (user_id, guild_id, fert.item_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE drug_grows
+                SET ready_at = ?, yield_mult = ?
+                WHERE grow_id = ? AND user_id = ? AND guild_id = ?
+                """,
+                (new_ready, fert.yield_mult, grow_id, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return None
+
+    async def _inventory_qty_unlocked(self, user_id: int, guild_id: int, item_id: str) -> int:
+        cursor = await self.conn.execute(
+            "SELECT quantity FROM inventory WHERE user_id = ? AND guild_id = ? AND item_id = ?",
+            (user_id, guild_id, item_id),
+        )
+        row = await cursor.fetchone()
+        return int(row["quantity"]) if row is not None else 0
 
     async def harvest_drugs(self, user_id: int, guild_id: int) -> dict[str, int]:
         """Harvest all ready grows. Returns {drug_id: quantity_added}."""
@@ -8380,18 +8574,22 @@ class Database:
         async with self._write_lock:
             cursor = await self.conn.execute(
                 """
-                SELECT grow_id, drug_id FROM drug_grows
+                SELECT grow_id, drug_id, yield_mult FROM drug_grows
                 WHERE user_id = ? AND guild_id = ? AND ready_at <= ?
                 """,
                 (user_id, guild_id, now),
             )
-            ready = [(int(r["grow_id"]), str(r["drug_id"])) for r in await cursor.fetchall()]
-            for grow_id, drug_id in ready:
+            ready = [
+                (int(r["grow_id"]), str(r["drug_id"]), float(r["yield_mult"] or 1.0))
+                for r in await cursor.fetchall()
+            ]
+            for grow_id, drug_id, crop_yield_mult in ready:
                 defn = drug_by_id(drug_id)
                 if defn is None:
                     await self.conn.execute("DELETE FROM drug_grows WHERE grow_id = ?", (grow_id,))
                     continue
                 amount = roll_yield(defn, yield_bonus=yield_bonus, rng=random)
+                amount = max(1, int(round(amount * crop_yield_mult)))
                 await self.conn.execute(
                     """
                     INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
@@ -8669,11 +8867,26 @@ class Database:
                 await self.conn.execute(
                     """
                     UPDATE user_character
-                    SET pending_consumable = ?, pending_consumable_expires = ?
+                    SET active_drug_buff = ?, active_drug_buff_expires = ?
                     WHERE user_id = ? AND guild_id = ?
                     """,
                     (drug_buff_key(canonical_id, buff_variant), expires, user_id, guild_id),
                 )
+                if defn.effect_cc_immunity:
+                    await self.conn.execute(
+                        """
+                        UPDATE boss_raider_status
+                        SET attack_slow_until = 0,
+                            verdant_root_until = 0,
+                            debuff_attack_cooldown = 0
+                        WHERE guild_id = ? AND user_id = ?
+                        """,
+                        (guild_id, user_id),
+                    )
+                    await self.conn.execute(
+                        "UPDATE users SET downed_until = 0 WHERE user_id = ? AND guild_id = ?",
+                        (user_id, guild_id),
+                    )
             await self.conn.commit()
         buff_duration = drug_effect_duration(defn) if drug_has_timed_effect(defn) else None
         new_hp: float | None = None
@@ -8737,14 +8950,14 @@ class Database:
             "expires": expires,
         }
 
-    async def _clear_expired_pending_drug_buff(
+    async def _clear_expired_active_drug_buff(
         self, user_id: int, guild_id: int, *, now: float | None = None,
     ) -> None:
         at = time.time() if now is None else now
         row = await self._refresh_character_energy_unlocked(user_id, guild_id)
         try:
-            pending = row["pending_consumable"]
-            expires = float(row["pending_consumable_expires"] or 0)
+            pending = row["active_drug_buff"]
+            expires = float(row["active_drug_buff_expires"] or 0)
         except (KeyError, TypeError):
             return
         from utils.drugs import parse_drug_buff_key
@@ -8756,12 +8969,30 @@ class Database:
         await self.conn.execute(
             """
             UPDATE user_character
-            SET pending_consumable = NULL, pending_consumable_expires = NULL
+            SET active_drug_buff = NULL, active_drug_buff_expires = NULL
             WHERE user_id = ? AND guild_id = ?
             """,
             (user_id, guild_id),
         )
         await self.conn.commit()
+
+    async def _active_drug_buff_row(
+        self, user_id: int, guild_id: int, *, now: float | None = None,
+    ) -> tuple[str, float] | None:
+        at = time.time() if now is None else now
+        row = await self._refresh_character_energy_unlocked(user_id, guild_id)
+        try:
+            pending = row["active_drug_buff"]
+            expires = float(row["active_drug_buff_expires"] or 0)
+        except (KeyError, TypeError):
+            return None
+        from utils.drugs import parse_drug_buff_key
+
+        if parse_drug_buff_key(str(pending) if pending else None) is None:
+            return None
+        if expires < at:
+            return None
+        return str(pending), expires
 
     async def take_pending_drug_buff(self, user_id: int, guild_id: int) -> dict[str, object] | None:
         """Return the active drug combat buff without consuming it."""
@@ -8771,14 +9002,12 @@ class Database:
         """Return active drug combat buff without consuming it."""
         async with self._write_lock:
             now = time.time()
-            await self._clear_expired_pending_drug_buff(user_id, guild_id, now=now)
-            row = await self._refresh_character_energy_unlocked(user_id, guild_id)
-            try:
-                pending = row["pending_consumable"]
-                expires = float(row["pending_consumable_expires"] or 0)
-            except (KeyError, TypeError):
+            await self._clear_expired_active_drug_buff(user_id, guild_id, now=now)
+            row = await self._active_drug_buff_row(user_id, guild_id, now=now)
+            if row is None:
                 return None
-            return self._pending_drug_buff_payload(str(pending) if pending else "", expires, now=now)
+            pending, expires = row
+            return self._pending_drug_buff_payload(pending, expires, now=now)
 
     async def has_active_drug_cc_immunity(self, user_id: int, guild_id: int) -> bool:
         buff = await self.peek_pending_drug_buff(user_id, guild_id)
@@ -8796,14 +9025,12 @@ class Database:
 
         async with self._write_lock:
             now = time.time()
-            await self._clear_expired_pending_drug_buff(user_id, guild_id, now=now)
-            row = await self._refresh_character_energy_unlocked(user_id, guild_id)
-            try:
-                pending = row["pending_consumable"]
-                expires = float(row["pending_consumable_expires"] or 0)
-            except (KeyError, TypeError):
+            await self._clear_expired_active_drug_buff(user_id, guild_id, now=now)
+            row = await self._active_drug_buff_row(user_id, guild_id, now=now)
+            if row is None:
                 return 0.0, ""
-            buff = self._pending_drug_buff_payload(str(pending) if pending else "", expires, now=now)
+            pending, expires = row
+            buff = self._pending_drug_buff_payload(pending, expires, now=now)
             if buff is None:
                 return 0.0, ""
             chance = float(buff.get("attack_hp_risk_chance") or 0.0)

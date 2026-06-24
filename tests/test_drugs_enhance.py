@@ -137,6 +137,26 @@ class DrugBuffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         assert hp is not None
         self.assertLess(hp, 200.0)
 
+    async def test_drug_buff_survives_shop_pending_consumable(self) -> None:
+        await self._stock("heroin")
+        await self.db.consume_drug(self.user_id, self.guild_id, "heroin", max_hp=200.0)
+        await self.db.set_pending_consumable(self.user_id, self.guild_id, "raid_potion")
+        self.assertTrue(await self.db.has_active_drug_cc_immunity(self.user_id, self.guild_id))
+        self.assertTrue(await self.db.take_pending_consumable(self.user_id, self.guild_id, "raid_potion"))
+        self.assertTrue(await self.db.has_active_drug_cc_immunity(self.user_id, self.guild_id))
+
+    async def test_cc_immunity_clears_frost_debuff(self) -> None:
+        now = __import__("time").time()
+        await self.db.apply_boss_element_status(
+            self.guild_id, self.user_id, frost_slow_until=now + 60,
+        )
+        await self._stock("heroin")
+        await self.db.consume_drug(self.user_id, self.guild_id, "heroin", max_hp=200.0)
+        status = await self.db.get_boss_raider_status(self.guild_id, self.user_id)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertLessEqual(float(status["attack_slow_until"]), now)
+
 
 if __name__ == "__main__":
     unittest.main()

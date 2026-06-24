@@ -706,6 +706,35 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         inv = await self.db.get_drug_inventory(uid, guild_id)
         self.assertGreater(inv.get("blue_dream", 0), 0)
 
+    async def test_fertilizer_boosts_yield_and_shortens_grow(self) -> None:
+        guild_id, uid = 1, 100
+        await self.db.credit_wallet(uid, guild_id, 50_000.0, apply_bonuses=False)
+        await self.db.buy_item(uid, guild_id, "fertilizer", 1)
+        defn = drug_by_id("blue_dream")
+        assert defn is not None
+        _, err = await self.db.plant_drug(uid, guild_id, "blue_dream", fertilizer_id="fertilizer")
+        self.assertIsNone(err)
+        grows = await self.db.list_drug_grows(uid, guild_id)
+        self.assertEqual(len(grows), 1)
+        self.assertAlmostEqual(float(grows[0]["yield_mult"]), 1.5)
+        remaining = float(grows[0]["ready_at"]) - __import__("time").time()
+        self.assertLess(remaining, defn.grow_seconds * 0.8)
+
+    async def test_apply_fertilizer_to_existing_crop(self) -> None:
+        guild_id, uid = 1, 100
+        await self.db.credit_wallet(uid, guild_id, 50_000.0, apply_bonuses=False)
+        await self.db.buy_item(uid, guild_id, "xl_fertilizer", 1)
+        _, err = await self.db.plant_drug(uid, guild_id, "blue_dream")
+        self.assertIsNone(err)
+        grows = await self.db.list_drug_grows(uid, guild_id)
+        grow_id = int(grows[0]["grow_id"])
+        before_ready = float(grows[0]["ready_at"])
+        err = await self.db.apply_fertilizer_to_grow(uid, guild_id, grow_id, "xl_fertilizer")
+        self.assertIsNone(err)
+        grows = await self.db.list_drug_grows(uid, guild_id)
+        self.assertAlmostEqual(float(grows[0]["yield_mult"]), 2.0)
+        self.assertLess(float(grows[0]["ready_at"]), before_ready)
+
     async def test_legacy_stash_alias(self) -> None:
         guild_id, uid = 1, 100
         await self.db.ensure_user(uid, guild_id)
