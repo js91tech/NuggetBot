@@ -45,6 +45,7 @@ from utils.boss_element_effects import element_hazard_text, roll_element_proc
 from utils.character_attributes import (
     combat_bonuses_from_attributes,
     debuff_resistance_from_attributes,
+    resolve_downed_duration,
 )
 from utils.boss_mechanics import (
     boss_raid_damage_bonus,
@@ -1216,7 +1217,7 @@ class Boss(commands.Cog):
                 f"({ticks_left} tick{'s' if ticks_left != 1 else ''} left)."
             )
             if dot_hp <= 0:
-                downed_seconds = await self.bot.db.get_config_value(guild_id, "boss_downed_seconds")
+                downed_seconds = await self._downed_duration_seconds(member.id, guild_id)
                 await self.bot.db.set_downed_until(
                     member.id,
                     guild_id,
@@ -1625,6 +1626,11 @@ class Boss(commands.Cog):
             return
         await interaction.response.send_message(embed=embed)
 
+    async def _downed_duration_seconds(self, user_id: int, guild_id: int) -> float:
+        config_seconds = await self.bot.db.get_config_value(guild_id, "boss_downed_seconds")
+        attrs = await self.bot.db.get_character_attributes(user_id, guild_id)
+        return resolve_downed_duration(float(config_seconds), attrs)
+
     async def _apply_element_counter_effect(
         self,
         guild_id: int,
@@ -1733,7 +1739,7 @@ class Boss(commands.Cog):
             if raiders:
                 unlucky = random.choice(raiders)
                 steal = await self.bot.db.jester_steal_wallet(unlucky, victim_id, guild_id)
-                downed_seconds = await self.bot.db.get_config_value(guild_id, "boss_downed_seconds")
+                downed_seconds = await self._downed_duration_seconds(unlucky, guild_id)
                 await self.bot.db.set_downed_until(
                     unlucky,
                     guild_id,
@@ -1780,7 +1786,7 @@ class Boss(commands.Cog):
         threat = int(config.BOSS_VARIANTS[variant]["threat"])
         boss_name = str(boss_row["name"])
         if hp <= 0:
-            downed_seconds = await self.bot.db.get_config_value(guild_id, "boss_downed_seconds")
+            downed_seconds = await self._downed_duration_seconds(victim_id, guild_id)
             await self.bot.db.set_downed_until(victim_id, guild_id, time.time() + downed_seconds)
             return (
                 f"\nThreat {threat} {boss_name} {move} <@{victim_id}> for {damage} damage."

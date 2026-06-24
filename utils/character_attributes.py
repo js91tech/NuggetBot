@@ -222,6 +222,12 @@ def apply_cc_duration(duration: float, resistance: DebuffResistance) -> float:
     return max(config.ATTR_MIN_DEBUFF_SECONDS, reduced)
 
 
+def resolve_downed_duration(config_seconds: float, attrs: CharacterAttributes) -> float:
+    """Boss knockdown lockout: cap at max CC duration, then apply AGI reduction."""
+    capped = min(float(config_seconds), config.BOSS_DEBUFF_MAX_SECONDS)
+    return apply_cc_duration(capped, debuff_resistance_from_attributes(attrs))
+
+
 def apply_debuff_attack_cooldown(cooldown: float, resistance: DebuffResistance) -> float:
     return max(2.0, cooldown * resistance.debuff_attack_cd_mult)
 

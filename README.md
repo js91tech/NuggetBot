@@ -252,7 +252,7 @@ server and take effect without restarting the bot.
 | `hack_penalty_increment` | 2.0 | Penalty increase per pass |
 | `hack_cooldown_seconds` | 300 | Per-user `/hack` cooldown |
 | `boss_health_scale_factor` | 0.02 | Boss HP scaling (base capped at 15,000 before variant multiplier) |
-| `boss_downed_seconds` | 120 | Boss downed duration |
+| `boss_downed_seconds` | 30 | Boss downed duration (capped at 30s; AGI reduces further) |
 | `imposter_chance` | 0.01 | Per-message sabotage chance |
 | `trivia_reward` | 25.0 | Trivia answer reward |
 
