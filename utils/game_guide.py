@@ -479,7 +479,14 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     f"+{int(config.BUSINESS_PRESTIGE_INCOME_BONUS_PER_LEVEL * 100)}%/level income bonus\n"
                     "· **Mega projects** (`/business megaprojects`):\n"
                     + "\n".join(mega_lines)
-                    + "\n· Seasonal events (admin `/event`): Summer Festival, Holiday Rush, "
+                    + "\n· **Acquisitions** (`/business acquisitions`) after all megas: "
+                    "Media Conglomerate, Private Security, Pharma Lab\n"
+                    "· **Supply chain** (`/business supplychain`) at tier 5+: auto-fund lab "
+                    "plants from stored revenue\n"
+                    "· **Legacy perks** at prestige 10+: Automation, Diversification, or "
+                    "Hostile Takeover\n"
+                    "· **District wars** — dominant crew in a district earns +5% member income\n"
+                    "· Seasonal events (admin `/event`): Summer Festival, Holiday Rush, "
                     "Economic Crisis, Tech Boom.",
                 ],
             ),
@@ -493,8 +500,11 @@ def _build_sections() -> tuple[GuideSection, ...]:
                 "Drug Trade",
                 [
                     "**High risk, high reward contraband.** `/drugs lab` opens your grow lab: "
-                    f"plant a strain in one of **{config.DRUG_LAB_SLOTS}** slots, wait for it to "
-                    "mature, then **Harvest** and sell or **Use** for effects.\n"
+                    "plant strains (extra slot at dealer rank 5), wait, **Harvest**, then sell "
+                    "or **Use** for effects.\n"
+                    "· `/drugs rank` — dealer rank unlocks (market at 3, wholesale at 7, "
+                    "Cartel title at 10)\n"
+                    "· `/drugs wholesale` — fixed-price NPC buyer, no raid risk (rank 7+)\n"
                     "· `/drugs catalog` — all strains, prices, and effects\n"
                     "· `/drugs stash` — your inventory and active buffs\n"
                     "· `/drugs use` — consume product from stash",
