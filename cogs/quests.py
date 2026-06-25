@@ -11,11 +11,14 @@ from utils.quests import (
     TRACK_DAILY,
     TRACK_EMPIRE,
     TRACK_ONBOARDING,
+    TRACK_WEEKLY,
     ensure_daily_quests,
     ensure_empire_quests,
     ensure_onboarding_quests,
+    ensure_weekly_quests,
     format_quest_lines,
     is_veteran,
+    weekly_reset_key,
 )
 
 
@@ -86,6 +89,20 @@ class Quests(commands.Cog):
             )
             daily_embed.set_footer(text="Resets at UTC midnight · Rewards pay on completion")
             embeds.append(daily_embed)
+
+            await ensure_weekly_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+            weekly_rows = await self.bot.db.list_user_quests(
+                interaction.guild_id, interaction.user.id, TRACK_WEEKLY,
+            )
+            weekly_embed = discord.Embed(
+                title="Weekly challenges",
+                description="\n".join(format_quest_lines(weekly_rows, track=TRACK_WEEKLY)),
+                color=discord.Color.purple(),
+            )
+            weekly_embed.set_footer(
+                text=f"Resets {weekly_reset_key()} · Bigger rewards than dailies",
+            )
+            embeds.append(weekly_embed)
 
         if not embeds:
             embeds.append(discord.Embed(title="Quests", description="No active quests.", color=discord.Color.greyple()))

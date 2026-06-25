@@ -357,6 +357,12 @@ class TradeReceiveView(discord.ui.View):
             }
             await interaction.response.send_message(msgs.get(err, "Could not accept."), ephemeral=True)
             return
+        trade = await self.cog.bot.db.get_pending_trade(self.trade_id, self.guild_id)
+        if trade is not None:
+            from utils.quests import record_quest_event
+
+            for uid in (int(trade["initiator_id"]), int(trade["receiver_id"])):
+                await record_quest_event(self.cog.bot.db, self.guild_id, uid, "trade_complete")
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="**Trade completed!**", view=self)

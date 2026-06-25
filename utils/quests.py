@@ -51,6 +51,19 @@ DAILY_QUEST_POOL: tuple[QuestDef, ...] = (
     QuestDef("corp_project", "Corp Investor", "Contribute to a crew corporate project.", 1, 1_000.0, "corp_project"),
 )
 
+WEEKLY_QUEST_POOL: tuple[QuestDef, ...] = (
+    QuestDef("wk_boss_damage", "Raid Week", "Land 25 boss attacks.", 25, 2_500.0, "boss_attack"),
+    QuestDef("wk_heals", "Field Hospital", "Heal raiders 15 times.", 15, 2_000.0, "boss_heal"),
+    QuestDef("wk_messages", "Community Pulse", "Earn from 100 chat messages.", 100, 1_800.0, "chat_message"),
+    QuestDef("wk_drug_sales", "Distribution Run", "Sell product 10 times.", 10, 2_200.0, "drug_sell"),
+    QuestDef("wk_biz_collect", "Empire Week", "Collect business revenue 5 times.", 5, 2_000.0, "business_collect"),
+    QuestDef("wk_duels", "Arena Week", "Win 3 duels.", 3, 2_400.0, "duel_win"),
+    QuestDef("wk_dungeons", "Delve Deep", "Clear 3 dungeons.", 3, 2_600.0, "dungeon_clear"),
+    QuestDef("wk_trades", "Dealer Network", "Complete a player trade.", 1, 1_500.0, "trade_complete"),
+    QuestDef("wk_jobs", "Grind Week", "Complete 15 job shifts.", 15, 1_900.0, "job_work"),
+    QuestDef("wk_gamble", "High Roller", "Play gambling 8 times.", 8, 1_700.0, "gamble_play"),
+)
+
 EMPIRE_QUESTS: tuple[QuestDef, ...] = (
     QuestDef("empire_create", "Open Shop", "Create a business with `/business create`.", 1, 1_000.0, "business_create"),
     QuestDef("empire_upgrade", "First Upgrade", "Collect revenue and buy a business upgrade.", 1, 2_000.0, "business_upgrade"),
@@ -60,6 +73,7 @@ EMPIRE_QUESTS: tuple[QuestDef, ...] = (
 DAILY_QUEST_COUNT = 3
 TRACK_ONBOARDING = "onboarding"
 TRACK_DAILY = "daily"
+TRACK_WEEKLY = "weekly"
 TRACK_EMPIRE = config.TRACK_EMPIRE
 
 
@@ -68,8 +82,15 @@ def daily_reset_key(timestamp: float | None = None) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(ts))
 
 
+def weekly_reset_key(timestamp: float | None = None) -> str:
+    from datetime import datetime, timezone
+
+    dt = datetime.fromtimestamp(time.time() if timestamp is None else timestamp, tz=timezone.utc)
+    return dt.strftime("%G-W%V")
+
+
 def quest_by_id(quest_id: str) -> QuestDef | None:
-    for quest in (*ONBOARDING_QUESTS, *DAILY_QUEST_POOL, *EMPIRE_QUESTS):
+    for quest in (*ONBOARDING_QUESTS, *DAILY_QUEST_POOL, *WEEKLY_QUEST_POOL, *EMPIRE_QUESTS):
         if quest.quest_id == quest_id:
             return quest
     return None
@@ -119,6 +140,26 @@ async def ensure_onboarding_quests(db: Database, guild_id: int, user_id: int) ->
         )
 
 
+async def ensure_weekly_quests(db: Database, guild_id: int, user_id: int) -> None:
+    reset_key = weekly_reset_key()
+    rows = await db.list_user_quests(guild_id, user_id, TRACK_WEEKLY)
+    if rows and all(str(row["reset_key"]) == reset_key for row in rows):
+        return
+    await db.clear_user_quest_track(guild_id, user_id, TRACK_WEEKLY)
+    picks = random.sample(
+        list(WEEKLY_QUEST_POOL), k=min(config.WEEKLY_QUEST_COUNT, len(WEEKLY_QUEST_POOL)),
+    )
+    for quest in picks:
+        await db.upsert_user_quest(
+            guild_id,
+            user_id,
+            TRACK_WEEKLY,
+            quest.quest_id,
+            target=quest.target,
+            reset_key=reset_key,
+        )
+
+
 async def ensure_daily_quests(db: Database, guild_id: int, user_id: int) -> None:
     reset_key = daily_reset_key()
     rows = await db.list_user_quests(guild_id, user_id, TRACK_DAILY)
@@ -163,10 +204,14 @@ async def record_quest_event(
             tracks.append(TRACK_EMPIRE)
         if is_veteran(progress):
             await ensure_daily_quests(db, guild_id, user_id)
+            await ensure_weekly_quests(db, guild_id, user_id)
             tracks.append(TRACK_DAILY)
+            tracks.append(TRACK_WEEKLY)
         elif empire_done:
             await ensure_daily_quests(db, guild_id, user_id)
+            await ensure_weekly_quests(db, guild_id, user_id)
             tracks.append(TRACK_DAILY)
+            tracks.append(TRACK_WEEKLY)
 
     completed_ids: list[str] = []
     for track in tracks:
