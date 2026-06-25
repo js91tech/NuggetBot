@@ -157,6 +157,47 @@ class DrugBuffDatabaseTests(unittest.IsolatedAsyncioTestCase):
         assert status is not None
         self.assertLessEqual(float(status["attack_slow_until"]), now)
 
+    async def test_cc_immunity_clears_debuff_attack_recovery(self) -> None:
+        now = __import__("time").time()
+        await self.db.record_boss_attack_time(self.guild_id, self.user_id, now)
+        await self.db.apply_boss_element_status(
+            self.guild_id,
+            self.user_id,
+            frost_slow_until=now + 30,
+            debuff_attack_cooldown=10.0,
+        )
+        before = await self.db.boss_attack_cooldown_remaining(
+            self.guild_id, self.user_id, at=now + 1,
+        )
+        self.assertIsNotNone(before)
+        assert before is not None
+        self.assertGreater(before, 7.0)
+
+        await self._stock("heroin")
+        await self.db.consume_drug(self.user_id, self.guild_id, "heroin", max_hp=200.0)
+        after = await self.db.boss_attack_cooldown_remaining(
+            self.guild_id, self.user_id, at=now + 1,
+        )
+        self.assertIsNone(after)
+
+    async def test_cc_immunity_ignores_stale_debuff_cooldown(self) -> None:
+        now = __import__("time").time()
+        await self._stock("heroin")
+        await self.db.consume_drug(self.user_id, self.guild_id, "heroin", max_hp=200.0)
+        await self.db.record_boss_attack_time(self.guild_id, self.user_id, now)
+        await self.db.apply_boss_element_status(
+            self.guild_id,
+            self.user_id,
+            frost_slow_until=now + 30,
+            debuff_attack_cooldown=10.0,
+        )
+        remaining = await self.db.boss_attack_cooldown_remaining(
+            self.guild_id, self.user_id, at=now + 1,
+        )
+        self.assertIsNotNone(remaining)
+        assert remaining is not None
+        self.assertLess(remaining, 8.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1200,6 +1200,17 @@ class Boss(commands.Cog):
         attrs = await self.bot.db.get_character_attributes(user_id, guild_id)
         return resolve_downed_duration(float(config_seconds), attrs)
 
+    async def _boss_attack_cooldown_error(self, guild_id: int, user_id: int) -> str | None:
+        cooldown = await self.bot.db.boss_attack_cooldown_remaining(guild_id, user_id)
+        if cooldown is None or cooldown <= 0:
+            return None
+        if await self.bot.db.has_active_drug_cc_immunity(user_id, guild_id):
+            return (
+                f"Next strike in **{cooldown:.1f}s** "
+                f"(normal raid pacing — **CC immune**)."
+            )
+        return f"Recovering — **{cooldown:.1f}s** until your next strike."
+
     async def execute_boss_attack(
         self,
         member: discord.Member,
@@ -1243,11 +1254,9 @@ class Boss(commands.Cog):
                 )
                 return BossAttackResult(error=f"{dot_note} You are **downed**!")
 
-        cooldown = await self.bot.db.boss_attack_cooldown_remaining(guild_id, member.id)
-        if cooldown is not None and cooldown > 0:
-            return BossAttackResult(
-                error=f"Recovering — **{cooldown:.1f}s** until your next strike.",
-            )
+        cooldown_error = await self._boss_attack_cooldown_error(guild_id, member.id)
+        if cooldown_error is not None:
+            return BossAttackResult(error=cooldown_error)
 
         loadout = await self._loadout(member.id, guild_id)
         set_bonus = detect_set_bonus(loadout.primary, loadout.armor)
@@ -1491,11 +1500,12 @@ class Boss(commands.Cog):
                     target = row
                     break
 
-        cooldown = await self.bot.db.boss_attack_cooldown_remaining(guild_id, member.id)
-        if cooldown is not None and cooldown > 0:
-            return BossAttackResult(
-                error=f"Recovering — **{cooldown:.1f}s** until your next strike.",
-            )
+        if await self.bot.db.has_active_drug_cc_immunity(member.id, guild_id):
+            await self.bot.db.clear_boss_raider_cc_debuffs(guild_id, member.id)
+
+        cooldown_error = await self._boss_attack_cooldown_error(guild_id, member.id)
+        if cooldown_error is not None:
+            return BossAttackResult(error=cooldown_error)
 
         loadout = await self._loadout(member.id, guild_id)
         set_bonus = detect_set_bonus(loadout.primary, loadout.armor)

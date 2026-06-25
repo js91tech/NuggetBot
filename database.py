@@ -5003,16 +5003,18 @@ class Database:
             base_cooldown = float(config.BOSS_ATTACK_COOLDOWN_SECONDS)
 
         cooldown_seconds = base_cooldown
-        status = await self.get_boss_raider_status(guild_id, user_id)
-        if status is not None:
-            debuff_cd = attack_cooldown_while_debuffed(
-                float(status["attack_slow_until"]),
-                float(status["verdant_root_until"]),
-                float(status["debuff_attack_cooldown"]),
-                now=now,
-            )
-            if debuff_cd is not None:
-                cooldown_seconds = debuff_cd
+        cc_immune = await self.has_active_drug_cc_immunity(user_id, guild_id)
+        if not cc_immune:
+            status = await self.get_boss_raider_status(guild_id, user_id)
+            if status is not None:
+                debuff_cd = attack_cooldown_while_debuffed(
+                    float(status["attack_slow_until"]),
+                    float(status["verdant_root_until"]),
+                    float(status["debuff_attack_cooldown"]),
+                    now=now,
+                )
+                if debuff_cd is not None:
+                    cooldown_seconds = debuff_cd
 
         remaining = (last_attack + cooldown_seconds) - now
         return remaining if remaining > 0 else None
@@ -5180,6 +5182,15 @@ class Database:
                     debuff_attack_cooldown = 0
                 WHERE guild_id = ? AND user_id = ?
                 """,
+                (guild_id, user_id),
+            )
+            await self.conn.commit()
+
+    async def reset_boss_attack_cooldown(self, guild_id: int, user_id: int) -> None:
+        """Drop stored boss attack pacing so the next strike is not blocked."""
+        async with self._write_lock:
+            await self.conn.execute(
+                "DELETE FROM boss_attack_cooldowns WHERE guild_id = ? AND user_id = ?",
                 (guild_id, user_id),
             )
             await self.conn.commit()
@@ -5360,12 +5371,13 @@ class Database:
         if row is None:
             return None
         parts: list[str] = []
+        cc_immune = await self.has_active_drug_cc_immunity(user_id, guild_id)
         slow_until = float(row["attack_slow_until"])
         root_until = float(row["verdant_root_until"])
         dot_ticks = int(row["dot_ticks_remaining"])
-        if slow_until > now:
+        if not cc_immune and slow_until > now:
             parts.append(f"❄️ Chilled ({int(slow_until - now)}s)")
-        if root_until > now:
+        if not cc_immune and root_until > now:
             parts.append(f"🌿 Rooted ({int(root_until - now)}s)")
         if dot_ticks > 0:
             parts.append(f"🔥 Burning ({dot_ticks} ticks)")
@@ -9583,6 +9595,31 @@ class Database:
                     (drug_buff_key(canonical_id, buff_variant), expires, user_id, guild_id),
                 )
                 if defn.effect_cc_immunity:
+                    now = time.time()
+                    status_cursor = await self.conn.execute(
+                        """
+                        SELECT attack_slow_until, verdant_root_until, debuff_attack_cooldown
+                        FROM boss_raider_status
+                        WHERE guild_id = ? AND user_id = ?
+                        """,
+                        (guild_id, user_id),
+                    )
+                    status_row = await status_cursor.fetchone()
+                    user_cursor = await self.conn.execute(
+                        "SELECT downed_until FROM users WHERE user_id = ? AND guild_id = ?",
+                        (user_id, guild_id),
+                    )
+                    user_row = await user_cursor.fetchone()
+                    had_cc_debuff = False
+                    if status_row is not None:
+                        had_cc_debuff = (
+                            float(status_row["attack_slow_until"]) > now
+                            or float(status_row["verdant_root_until"]) > now
+                            or float(status_row["debuff_attack_cooldown"]) > 0
+                        )
+                    was_downed = (
+                        user_row is not None and float(user_row["downed_until"]) > now
+                    )
                     await self.conn.execute(
                         """
                         UPDATE boss_raider_status
@@ -9597,6 +9634,14 @@ class Database:
                         "UPDATE users SET downed_until = 0 WHERE user_id = ? AND guild_id = ?",
                         (user_id, guild_id),
                     )
+                    if had_cc_debuff or was_downed:
+                        await self.conn.execute(
+                            """
+                            DELETE FROM boss_attack_cooldowns
+                            WHERE guild_id = ? AND user_id = ?
+                            """,
+                            (guild_id, user_id),
+                        )
             await self._apply_drug_synergy_buff_no_lock(user_id, guild_id)
             await self.conn.commit()
         buff_duration = drug_effect_duration(defn) if drug_has_timed_effect(defn) else None
