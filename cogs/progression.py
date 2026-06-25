@@ -406,6 +406,35 @@ class Progression(commands.Cog):
             ),
             inline=False,
         )
+        embed.add_field(
+            name="Business empire",
+            value=format_rows(
+                snapshot.get("business_prestige", []), value_label="score", value_key="score"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Drug sales (units)",
+            value=format_rows(
+                snapshot.get("drug_sales", []), value_label="units", value_key="score"
+            ),
+            inline=False,
+        )
+        corp_treasury = snapshot.get("corp_treasury", [])
+        if corp_treasury:
+            corp_lines = []
+            for index, row in enumerate(corp_treasury, start=1):
+                corp_lines.append(
+                    f"**{index}.** {row['user_id']} — {fmt_amount(float(row['score']))}"
+                )
+            embed.add_field(name="Richest corporations", value="\n".join(corp_lines), inline=False)
+        embed.add_field(
+            name="District influence",
+            value=format_rows(
+                snapshot.get("district_influence", []), value_label="influence", value_key="score"
+            ),
+            inline=False,
+        )
         crew_rows = snapshot.get("crews", [])
         if crew_rows:
             crew_lines = [

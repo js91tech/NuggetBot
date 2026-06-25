@@ -495,6 +495,7 @@ class Database:
         await self._migrate_drug_trade()
         await self._migrate_active_drug_buff()
         await self._migrate_drug_grow_fertilizer()
+        await self._migrate_empire_expansion()
 
     async def _migrate_character_attributes(self) -> None:
         import config
@@ -1354,6 +1355,107 @@ class Database:
                     await self.conn.execute(
                         f"ALTER TABLE drug_grows ADD COLUMN {col} {typedef}",
                     )
+        await self.conn.commit()
+
+    async def _migrate_empire_expansion(self) -> None:
+        """Empire expansion: satisfaction, dealer stats, acquisitions, legacy, cartel, district wars."""
+        pk = "SERIAL PRIMARY KEY" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        biz_cols = [
+            ("last_satisfaction_at", "REAL NOT NULL DEFAULT 0"),
+            ("last_team_event_at", "REAL NOT NULL DEFAULT 0"),
+            ("supply_chain_drug_id", "TEXT"),
+            ("synergy_stacks", "INTEGER NOT NULL DEFAULT 0"),
+            ("synergy_expires", "REAL NOT NULL DEFAULT 0"),
+        ]
+        if self.is_postgres:
+            for col, typedef in biz_cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'user_businesses' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_businesses ADD COLUMN {col} {typedef}",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(user_businesses)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in biz_cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_businesses ADD COLUMN {col} {typedef}",
+                    )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_drug_stats (
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                units_sold INTEGER NOT NULL DEFAULT 0 CHECK (units_sold >= 0),
+                PRIMARY KEY (user_id, guild_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_empire_acquisitions (
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                acquisition_id TEXT NOT NULL,
+                completed_at REAL NOT NULL,
+                PRIMARY KEY (user_id, guild_id, acquisition_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_legacy_perks (
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                perk_id TEXT NOT NULL,
+                granted_at REAL NOT NULL,
+                PRIMARY KEY (user_id, guild_id, perk_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS district_war_control (
+                guild_id BIGINT NOT NULL,
+                district_id TEXT NOT NULL,
+                crew_name TEXT NOT NULL,
+                bonus_ends_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, district_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS crew_cartel_grows (
+                grow_id {pk},
+                guild_id BIGINT NOT NULL,
+                crew_name TEXT NOT NULL,
+                drug_id TEXT NOT NULL,
+                planted_at REAL NOT NULL,
+                ready_at REAL NOT NULL,
+                yield_mult REAL NOT NULL DEFAULT 1.0
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crew_cartel_stash (
+                guild_id BIGINT NOT NULL,
+                crew_name TEXT NOT NULL,
+                drug_id TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+                PRIMARY KEY (guild_id, crew_name, drug_id)
+            )
+            """,
+        )
         await self.conn.commit()
 
     async def _migrate_crew_banking(self) -> None:
@@ -6847,7 +6949,73 @@ class Database:
             "duel_wins": await self.progress_leaderboard(guild_id, "duel_wins", limit=limit),
             "duel_elo": await self.duel_elo_leaderboard(guild_id, limit=limit),
             "crews": await self.crew_leaderboard(guild_id, limit=limit),
+            "business_prestige": await self.business_prestige_leaderboard(guild_id, limit=limit),
+            "drug_sales": await self.drug_sales_leaderboard(guild_id, limit=limit),
+            "corp_treasury": await self.corp_treasury_leaderboard(guild_id, limit=limit),
+            "district_influence": await self.district_influence_leaderboard(guild_id, limit=limit),
         }
+
+    async def business_prestige_leaderboard(
+        self, guild_id: int, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, (tier * 10 + business_prestige) AS score
+            FROM user_businesses
+            WHERE guild_id = ?
+            ORDER BY score DESC, user_id ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def drug_sales_leaderboard(
+        self, guild_id: int, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, units_sold AS score
+            FROM user_drug_stats
+            WHERE guild_id = ? AND units_sold > 0
+            ORDER BY score DESC, user_id ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def corp_treasury_leaderboard(
+        self, guild_id: int, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT crew_name AS user_id, treasury AS score
+            FROM crew_stats
+            WHERE guild_id = ? AND treasury > 0
+            ORDER BY score DESC, crew_name ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def district_influence_leaderboard(
+        self, guild_id: int, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT entity_id AS user_id, SUM(influence) AS score
+            FROM district_influence
+            WHERE guild_id = ? AND entity_type = 'user'
+            GROUP BY entity_id
+            HAVING SUM(influence) > 0
+            ORDER BY score DESC, entity_id ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
 
     async def list_user_quests(
         self,
@@ -7973,12 +8141,18 @@ class Database:
         return await cursor.fetchone()
 
     @staticmethod
-    def _business_hourly_from_row(row: aiosqlite.Row, *, district_mult: float | None = None) -> float:
+    def _business_hourly_from_row(
+        row: aiosqlite.Row,
+        *,
+        district_mult: float | None = None,
+        reputation_effectiveness: float = 1.0,
+    ) -> float:
         from utils.businesses import hourly_income, row_income_kwargs
 
         kwargs = row_income_kwargs(row)
         if district_mult is not None:
             kwargs["district_mult"] = district_mult
+        kwargs["reputation_effectiveness"] = reputation_effectiveness
         return hourly_income(**kwargs)
 
     async def get_business_income_breakdown(
@@ -7997,17 +8171,20 @@ class Database:
         if row is None:
             return None
         current = time.time() if now is None else now
-        base = self._business_hourly_from_row(row)
+        rep_eff = await self._reputation_effectiveness_no_lock(user_id, guild_id)
+        base = self._business_hourly_from_row(row, reputation_effectiveness=rep_eff)
         corp_mult = await self._corporate_income_mult_no_lock(user_id, guild_id)
         buff_mult = await self._active_buff_multiplier_no_lock(user_id, guild_id, current)
         event_mult = await self._business_event_mult_no_lock(guild_id)
         mega_mult = await self._mega_income_mult_no_lock(user_id, guild_id)
-        effective = base * corp_mult * buff_mult * event_mult * mega_mult
+        synergy_mult = await self._synergy_income_mult_no_lock(row, current)
+        district_war_mult = await self._district_war_income_mult_no_lock(user_id, guild_id, row, current)
+        effective = base * corp_mult * buff_mult * event_mult * mega_mult * synergy_mult * district_war_mult
         return BusinessIncomeBreakdown(
             base_hourly=base,
             effective_hourly=effective,
             corp_mult=corp_mult,
-            buff_mult=buff_mult,
+            buff_mult=buff_mult * synergy_mult * district_war_mult,
             event_mult=event_mult,
             mega_mult=mega_mult,
         )
@@ -8032,18 +8209,36 @@ class Database:
         if row is None:
             return None
         current = time.time() if now is None else now
+        await self._apply_satisfaction_decay_no_lock(row, user_id, guild_id, current)
+        cursor = await self.conn.execute(
+            "SELECT * FROM user_businesses WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
         last_at = float(row["last_income_at"]) or current
         elapsed = max(0.0, current - last_at)
         buff_mult = await self._active_buff_multiplier_no_lock(user_id, guild_id, current)
         corp_mult = await self._corporate_income_mult_no_lock(user_id, guild_id)
         event_mult = await self._business_event_mult_no_lock(guild_id)
         mega_mult = await self._mega_income_mult_no_lock(user_id, guild_id)
+        synergy_mult = await self._synergy_income_mult_no_lock(row, current)
+        district_war_mult = await self._district_war_income_mult_no_lock(user_id, guild_id, row, current)
+        rep_eff = await self._reputation_effectiveness_no_lock(user_id, guild_id)
+        legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
+        from utils.legacy_perks import offline_accrual_bonus_from_perks
+
+        offline_bonus = offline_accrual_bonus_from_perks(legacy)
         hourly = (
-            self._business_hourly_from_row(row)
+            self._business_hourly_from_row(row, reputation_effectiveness=rep_eff)
             * buff_mult
             * corp_mult
             * event_mult
             * mega_mult
+            * synergy_mult
+            * district_war_mult
+            * (1.0 + offline_bonus)
         )
         capacity = self._business_capacity_from_row(row)
         new_stored = accrue_income(
@@ -8243,6 +8438,385 @@ class Database:
             await self.conn.commit()
         return cost, None
 
+    async def _list_completed_acquisitions_no_lock(
+        self, user_id: int, guild_id: int,
+    ) -> set[str]:
+        cursor = await self.conn.execute(
+            "SELECT acquisition_id FROM user_empire_acquisitions WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        return {str(r["acquisition_id"]) for r in await cursor.fetchall()}
+
+    async def _list_legacy_perks_no_lock(self, user_id: int, guild_id: int) -> set[str]:
+        cursor = await self.conn.execute(
+            "SELECT perk_id FROM user_legacy_perks WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        return {str(r["perk_id"]) for r in await cursor.fetchall()}
+
+    async def _reputation_effectiveness_no_lock(self, user_id: int, guild_id: int) -> float:
+        acquisitions = await self._list_completed_acquisitions_no_lock(user_id, guild_id)
+        bonus = 0.0
+        if "media_conglomerate" in acquisitions:
+            bonus = float(config.EMPIRE_ACQUISITIONS["media_conglomerate"]["reputation_bonus_factor"])
+        return 1.0 + bonus
+
+    async def _security_acquisition_bonus_no_lock(self, user_id: int, guild_id: int) -> int:
+        acquisitions = await self._list_completed_acquisitions_no_lock(user_id, guild_id)
+        if "private_security" in acquisitions:
+            return int(config.EMPIRE_ACQUISITIONS["private_security"]["security_bonus"])
+        return 0
+
+    async def _synergy_income_mult_no_lock(self, row: aiosqlite.Row, now: float) -> float:
+        stacks = int(row["synergy_stacks"] or 0)
+        expires = float(row["synergy_expires"] or 0)
+        if stacks <= 0 or expires <= now:
+            return 1.0
+        bonus = stacks * config.DRUG_SYNERGY_BUFF_INCOME_BONUS
+        return 1.0 + bonus
+
+    async def _district_war_income_mult_no_lock(
+        self, user_id: int, guild_id: int, row: aiosqlite.Row, now: float,
+    ) -> float:
+        district_id = row["district_id"]
+        if not district_id:
+            return 1.0
+        crew = await self._crew_name_no_lock(user_id, guild_id)
+        if crew is None:
+            return 1.0
+        cursor = await self.conn.execute(
+            """
+            SELECT crew_name, bonus_ends_at FROM district_war_control
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild_id, str(district_id)),
+        )
+        control = await cursor.fetchone()
+        if control is None:
+            return 1.0
+        if float(control["bonus_ends_at"]) <= now:
+            return 1.0
+        if str(control["crew_name"]).lower() != crew.lower():
+            return 1.0
+        return 1.0 + config.DISTRICT_WAR_CONTROL_BONUS
+
+    async def _apply_satisfaction_decay_no_lock(
+        self, row: aiosqlite.Row, user_id: int, guild_id: int, now: float,
+    ) -> None:
+        last_at = float(row["last_satisfaction_at"] or row["created_at"] or now)
+        if last_at <= 0:
+            last_at = now
+        elapsed_hours = max(0.0, (now - last_at) / 3600.0)
+        if elapsed_hours < 1.0:
+            return
+        days = elapsed_hours / 24.0
+        decay = days * config.BUSINESS_SATISFACTION_DECAY_PER_DAY
+        sat = int(row["employee_satisfaction"])
+        neutral = config.BUSINESS_SATISFACTION_NEUTRAL
+        if sat > neutral:
+            new_sat = max(neutral, int(round(sat - decay)))
+        elif sat < neutral:
+            new_sat = min(neutral, int(round(sat + decay * 0.5)))
+        else:
+            new_sat = sat
+        # Neglect penalty if no management in 24h+ and below neutral
+        if elapsed_hours >= config.BUSINESS_MANAGE_NEGLECT_HOURS and sat <= neutral:
+            new_sat = max(0, new_sat - config.BUSINESS_MANAGE_NEGLECT_PENALTY)
+        if new_sat != sat:
+            await self.conn.execute(
+                """
+                UPDATE user_businesses SET employee_satisfaction = ?, last_satisfaction_at = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (new_sat, now, user_id, guild_id),
+            )
+
+    async def manage_business_wages(
+        self, user_id: int, guild_id: int,
+    ) -> dict[str, object]:
+        async with self._write_lock:
+            row = await self._settle_business_income_no_lock(user_id, guild_id)
+            if row is None:
+                await self.conn.commit()
+                return {"error": "no_business"}
+            breakdown = await self.get_business_income_breakdown(user_id, guild_id, row)
+            hourly = breakdown.effective_hourly if breakdown else self._business_hourly_from_row(row)
+            cost = round(hourly * config.BUSINESS_MANAGE_WAGE_COST_FRACTION, 2)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < cost:
+                await self.conn.commit()
+                return {"error": "insufficient_funds", "cost": cost}
+            sat = min(100, int(row["employee_satisfaction"]) + config.BUSINESS_MANAGE_WAGE_SAT_GAIN)
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (cost, user_id, guild_id),
+            )
+            now = time.time()
+            await self.conn.execute(
+                """
+                UPDATE user_businesses
+                SET employee_satisfaction = ?, last_satisfaction_at = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (sat, now, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return {"error": None, "cost": cost, "satisfaction": sat}
+
+    async def manage_business_event(
+        self, user_id: int, guild_id: int,
+    ) -> dict[str, object]:
+        async with self._write_lock:
+            row = await self._settle_business_income_no_lock(user_id, guild_id)
+            if row is None:
+                await self.conn.commit()
+                return {"error": "no_business"}
+            now = time.time()
+            last_event = float(row["last_team_event_at"] or 0)
+            if last_event > 0 and (now - last_event) < config.BUSINESS_MANAGE_EVENT_COOLDOWN_SECONDS:
+                await self.conn.commit()
+                return {"error": "cooldown", "retry_after": config.BUSINESS_MANAGE_EVENT_COOLDOWN_SECONDS - (now - last_event)}
+            tier = int(row["tier"])
+            cost = config.BUSINESS_MANAGE_EVENT_BASE_COST + tier * config.BUSINESS_MANAGE_EVENT_COST_PER_TIER
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < cost:
+                await self.conn.commit()
+                return {"error": "insufficient_funds", "cost": cost}
+            sat = min(100, int(row["employee_satisfaction"]) + config.BUSINESS_MANAGE_EVENT_SAT_GAIN)
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (cost, user_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE user_businesses
+                SET employee_satisfaction = ?, last_satisfaction_at = ?, last_team_event_at = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (sat, now, now, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return {"error": None, "cost": cost, "satisfaction": sat}
+
+    async def set_supply_chain_drug(
+        self, user_id: int, guild_id: int, drug_id: str | None,
+    ) -> str | None:
+        from utils.drugs import drug_by_id
+
+        if drug_id is not None:
+            if drug_by_id(drug_id) is None:
+                return "invalid_drug"
+            drug_id = drug_by_id(drug_id).drug_id
+        async with self._write_lock:
+            row = await self.get_business(user_id, guild_id)
+            if row is None:
+                await self.conn.commit()
+                return "no_business"
+            if int(row["tier"]) < config.DRUG_SUPPLY_CHAIN_TIER_MIN:
+                await self.conn.commit()
+                return "tier_too_low"
+            await self.conn.execute(
+                "UPDATE user_businesses SET supply_chain_drug_id = ? WHERE user_id = ? AND guild_id = ?",
+                (drug_id, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return None
+
+    async def apply_drug_synergy_buff(self, user_id: int, guild_id: int) -> None:
+        async with self._write_lock:
+            await self._apply_drug_synergy_buff_no_lock(user_id, guild_id)
+            await self.conn.commit()
+
+    async def _apply_drug_synergy_buff_no_lock(self, user_id: int, guild_id: int) -> None:
+        row = await self.get_business(user_id, guild_id)
+        if row is None:
+            return
+        now = time.time()
+        expires = float(row["synergy_expires"] or 0)
+        stacks = int(row["synergy_stacks"] or 0)
+        if expires <= now:
+            stacks = 0
+        stacks = min(stacks + 1, config.DRUG_SYNERGY_BUFF_MAX_STACKS)
+        await self.conn.execute(
+            """
+            UPDATE user_businesses
+            SET synergy_stacks = ?, synergy_expires = ?
+            WHERE user_id = ? AND guild_id = ?
+            """,
+            (stacks, now + config.DRUG_SYNERGY_BUFF_DURATION_SECONDS, user_id, guild_id),
+        )
+
+    async def get_drug_stats(self, user_id: int, guild_id: int) -> dict[str, int]:
+        cursor = await self.conn.execute(
+            "SELECT units_sold FROM user_drug_stats WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        return {"units_sold": int(row["units_sold"]) if row else 0}
+
+    async def _increment_drug_units_sold_no_lock(
+        self, user_id: int, guild_id: int, quantity: int,
+    ) -> None:
+        await self._ensure_user_no_lock(user_id, guild_id)
+        await self.conn.execute(
+            """
+            INSERT INTO user_drug_stats (user_id, guild_id, units_sold)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, guild_id) DO UPDATE SET
+                units_sold = user_drug_stats.units_sold + excluded.units_sold
+            """,
+            (user_id, guild_id, max(0, int(quantity))),
+        )
+
+    async def grant_legacy_perk(
+        self, user_id: int, guild_id: int, perk_id: str,
+    ) -> str | None:
+        from utils.legacy_perks import legacy_perk_by_id
+
+        if legacy_perk_by_id(perk_id) is None:
+            return "invalid_perk"
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                "SELECT 1 FROM user_legacy_perks WHERE user_id = ? AND guild_id = ? AND perk_id = ?",
+                (user_id, guild_id, perk_id),
+            )
+            if await cursor.fetchone() is not None:
+                await self.conn.commit()
+                return "already_owned"
+            await self.conn.execute(
+                """
+                INSERT INTO user_legacy_perks (user_id, guild_id, perk_id, granted_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, guild_id, perk_id, time.time()),
+            )
+            await self.conn.commit()
+        return None
+
+    async def list_legacy_perks(self, user_id: int, guild_id: int) -> set[str]:
+        return await self._list_legacy_perks_no_lock(user_id, guild_id)
+
+    async def list_empire_acquisitions(self, user_id: int, guild_id: int) -> set[str]:
+        return await self._list_completed_acquisitions_no_lock(user_id, guild_id)
+
+    async def purchase_empire_acquisition(
+        self, user_id: int, guild_id: int, acquisition_id: str,
+    ) -> dict[str, object]:
+        from utils.empire_acquisitions import acquisition_by_id
+        from utils.mega_projects import MEGA_PROJECTS
+
+        acq = acquisition_by_id(acquisition_id)
+        if acq is None:
+            return {"error": "invalid_acquisition"}
+        completed_megas = await self.list_user_mega_projects(user_id, guild_id)
+        all_megas_done = all(
+            pid in completed_megas and completed_megas[pid].get("completed_at")
+            for pid in (p.project_id for p in MEGA_PROJECTS)
+        )
+        if not all_megas_done:
+            return {"error": "megas_incomplete"}
+        async with self._write_lock:
+            existing = await self._list_completed_acquisitions_no_lock(user_id, guild_id)
+            if acquisition_id in existing:
+                await self.conn.commit()
+                return {"error": "already_owned"}
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < acq.cost:
+                await self.conn.commit()
+                return {"error": "insufficient_funds", "cost": acq.cost}
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (acq.cost, user_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO user_empire_acquisitions (user_id, guild_id, acquisition_id, completed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, guild_id, acquisition_id, time.time()),
+            )
+            await self.conn.commit()
+        return {"error": None, "acquisition_id": acquisition_id, "cost": acq.cost}
+
+    async def process_district_wars(self, guild_id: int) -> None:
+        from utils.districts import DISTRICT_MAP
+
+        now = time.time()
+        ends_at = now + config.DISTRICT_WAR_TICK_SECONDS
+        async with self._write_lock:
+            for district_id in DISTRICT_MAP:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT cm.crew_name, SUM(di.influence) AS total
+                    FROM district_influence di
+                    JOIN crew_members cm
+                      ON cm.guild_id = di.guild_id AND CAST(cm.user_id AS TEXT) = di.entity_id
+                    WHERE di.guild_id = ? AND di.district_id = ? AND di.entity_type = 'user'
+                    GROUP BY cm.crew_name
+                    ORDER BY total DESC
+                    LIMIT 1
+                    """,
+                    (guild_id, district_id),
+                )
+                top = await cursor.fetchone()
+                if top is None or float(top["total"] or 0) <= 0:
+                    continue
+                await self.conn.execute(
+                    """
+                    INSERT INTO district_war_control (guild_id, district_id, crew_name, bonus_ends_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(guild_id, district_id) DO UPDATE SET
+                        crew_name = excluded.crew_name,
+                        bonus_ends_at = excluded.bonus_ends_at
+                    """,
+                    (guild_id, district_id, str(top["crew_name"]), ends_at),
+                )
+            await self.conn.commit()
+
+    async def contest_district_war(
+        self, user_id: int, guild_id: int, district_id: str,
+    ) -> dict[str, object]:
+        crew = await self.get_crew_membership(user_id, guild_id)
+        if crew is None:
+            return {"error": "no_crew"}
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT influence FROM district_influence
+                WHERE guild_id = ? AND district_id = ? AND entity_type = 'crew' AND entity_id = ?
+                """,
+                (guild_id, district_id, crew),
+            )
+            row = await cursor.fetchone()
+            influence = float(row["influence"]) if row else 0.0
+            if influence < config.DISTRICT_WAR_CONTEST_COST:
+                await self.conn.commit()
+                return {"error": "insufficient_influence"}
+            new_inf = influence - config.DISTRICT_WAR_CONTEST_COST
+            await self.conn.execute(
+                """
+                INSERT INTO district_influence (guild_id, district_id, entity_type, entity_id, influence, updated_at)
+                VALUES (?, ?, 'crew', ?, ?, ?)
+                ON CONFLICT(guild_id, district_id, entity_type, entity_id) DO UPDATE SET
+                    influence = excluded.influence, updated_at = excluded.updated_at
+                """,
+                (guild_id, district_id, crew, new_inf, time.time()),
+            )
+            await self.conn.commit()
+        return {"error": None, "influence_spent": config.DISTRICT_WAR_CONTEST_COST}
+
     async def process_business_income(self, guild_id: int) -> None:
         """Background tick: accrue stored income for every business in a guild."""
         async with self._write_lock:
@@ -8254,7 +8828,62 @@ class Database:
             now = time.time()
             for uid in user_ids:
                 await self._settle_business_income_no_lock(uid, guild_id, now=now)
+                await self._process_supply_chain_no_lock(uid, guild_id, now=now)
             await self.conn.commit()
+
+    async def _process_supply_chain_no_lock(
+        self, user_id: int, guild_id: int, now: float,
+    ) -> None:
+        """Auto-plant supply chain drug when a lab slot is free (T5+ businesses)."""
+        from utils.drugs import drug_by_id
+
+        cursor = await self.conn.execute(
+            "SELECT tier, supply_chain_drug_id FROM user_businesses WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        biz = await cursor.fetchone()
+        if biz is None or int(biz["tier"]) < config.DRUG_SUPPLY_CHAIN_TIER_MIN:
+            return
+        drug_id = biz["supply_chain_drug_id"]
+        if not drug_id:
+            return
+        defn = drug_by_id(str(drug_id))
+        if defn is None:
+            return
+        stats = await self.get_drug_stats(user_id, guild_id)
+        from utils.dealer_ranks import dealer_rank, lab_slot_count
+        from utils.legacy_perks import extra_lab_slots_from_perks
+
+        rank = dealer_rank(stats["units_sold"])
+        legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
+        max_slots = lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) AS c FROM drug_grows WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        used = int((await cursor.fetchone())["c"])
+        if used >= max_slots:
+            return
+        cursor = await self.conn.execute(
+            "SELECT stored_income FROM user_businesses WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        stored_row = await cursor.fetchone()
+        stored = float(stored_row["stored_income"] or 0) if stored_row else 0.0
+        if stored < defn.seed_cost:
+            return
+        grow_seconds = int(defn.grow_seconds * config.DRUG_SUPPLY_CHAIN_GROW_SLOWDOWN)
+        await self.conn.execute(
+            "UPDATE user_businesses SET stored_income = stored_income - ? WHERE user_id = ? AND guild_id = ?",
+            (defn.seed_cost, user_id, guild_id),
+        )
+        await self.conn.execute(
+            """
+            INSERT INTO drug_grows (user_id, guild_id, drug_id, planted_at, ready_at, yield_mult)
+            VALUES (?, ?, ?, ?, ?, 1.0)
+            """,
+            (user_id, guild_id, defn.drug_id, now, now + grow_seconds),
+        )
 
     async def prestige_business(
         self, user_id: int, guild_id: int,
@@ -8271,9 +8900,13 @@ class Database:
                 await self.conn.commit()
                 return "not_max_tier", int(row["business_prestige"])
             if int(row["business_prestige"]) >= config.BUSINESS_PRESTIGE_MAX_LEVEL:
-                await self.conn.commit()
-                return "max_prestige", int(row["business_prestige"])
-            new_prestige = int(row["business_prestige"]) + 1
+                legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
+                if len(legacy) >= len(config.BUSINESS_LEGACY_PERKS):
+                    await self.conn.commit()
+                    return "max_prestige", int(row["business_prestige"])
+                new_prestige = int(row["business_prestige"])
+            else:
+                new_prestige = int(row["business_prestige"]) + 1
             tier1 = tier_def(1)
             await self.conn.execute(
                 """
@@ -8459,9 +9092,19 @@ class Database:
                 (user_id, guild_id),
             )
             row = await cursor.fetchone()
-            if row is not None and int(row["c"]) >= config.DRUG_LAB_SLOTS:
+            stats = await self.get_drug_stats(user_id, guild_id)
+            from utils.dealer_ranks import dealer_rank, lab_slot_count
+            from utils.legacy_perks import extra_lab_slots_from_perks
+
+            rank = dealer_rank(stats["units_sold"])
+            legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
+            max_slots = lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
+            if row is not None and int(row["c"]) >= max_slots:
                 await self.conn.commit()
                 return 0.0, "no_slots"
+            acquisitions = await self._list_completed_acquisitions_no_lock(user_id, guild_id)
+            if "pharma_lab" in acquisitions:
+                grow_seconds *= 1.0 - float(config.EMPIRE_ACQUISITIONS["pharma_lab"]["drug_grow_time_reduction"])
             await self._ensure_user_no_lock(user_id, guild_id)
             cursor = await self.conn.execute(
                 "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
@@ -8622,8 +9265,19 @@ class Database:
             if stored_id is None or available < quantity:
                 await self.conn.commit()
                 return {"error": "insufficient_product"}
-            # Raid risk: lose part of the product, no payout.
-            raided = random.random() < config.DRUG_RAID_CHANCE
+            raid_chance = config.DRUG_RAID_CHANCE
+            cursor = await self.conn.execute(
+                "SELECT tier, business_prestige FROM user_businesses WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            biz = await cursor.fetchone()
+            if biz is not None and int(biz["tier"]) >= 7:
+                reduction = min(
+                    config.DRUG_DISTRIBUTION_RAID_REDUCTION_CAP,
+                    int(biz["business_prestige"]) * config.DRUG_DISTRIBUTION_RAID_REDUCTION_PER_PRESTIGE,
+                )
+                raid_chance = max(0.0, raid_chance - reduction)
+            raided = random.random() < raid_chance
             if raided:
                 lost = max(1, int(quantity * config.DRUG_RAID_LOSS_FRACTION))
                 await self.conn.execute(
@@ -8655,8 +9309,52 @@ class Database:
                 """,
                 (guild_id, user_id, canonical_id, quantity, total, time.time()),
             )
+            await self._increment_drug_units_sold_no_lock(user_id, guild_id, quantity)
             await self.conn.commit()
         return {"error": None, "raided": False, "total": total, "quantity": quantity}
+
+    async def sell_drugs_wholesale(
+        self, user_id: int, guild_id: int, drug_id: str, quantity: int,
+    ) -> dict[str, object]:
+        """Bulk NPC buyer: fixed price, no raid risk (Dealer Rank 7+)."""
+        from utils.dealer_ranks import can_wholesale, dealer_rank
+        from utils.drugs import drug_by_id
+
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            return {"error": "invalid_drug"}
+        if quantity <= 0:
+            return {"error": "invalid_amount"}
+        stats = await self.get_drug_stats(user_id, guild_id)
+        rank = dealer_rank(stats["units_sold"])
+        if not can_wholesale(rank):
+            return {"error": "rank_locked", "required_rank": config.DEALER_RANK_WHOLESALE_UNLOCK}
+        canonical_id = defn.drug_id
+        unit_price = defn.street_price * config.DRUG_WHOLESALE_PRICE_FACTOR
+        total = round(unit_price * quantity, 2)
+        async with self._write_lock:
+            stored_id, available = await self._find_drug_inventory_qty(user_id, guild_id, canonical_id)
+            if stored_id is None or available < quantity:
+                await self.conn.commit()
+                return {"error": "insufficient_product"}
+            await self.conn.execute(
+                "UPDATE drug_inventory SET quantity = quantity - ? WHERE user_id = ? AND guild_id = ? AND drug_id = ?",
+                (quantity, user_id, guild_id, stored_id),
+            )
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ? WHERE user_id = ? AND guild_id = ?",
+                (total, total, user_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO drug_transactions (guild_id, user_id, drug_id, quantity, amount, txn_type, created_at)
+                VALUES (?, ?, ?, ?, ?, 'wholesale', ?)
+                """,
+                (guild_id, user_id, canonical_id, quantity, total, time.time()),
+            )
+            await self._increment_drug_units_sold_no_lock(user_id, guild_id, quantity)
+            await self.conn.commit()
+        return {"error": None, "total": total, "quantity": quantity, "unit_price": unit_price}
 
     async def create_drug_listing(
         self, user_id: int, guild_id: int, drug_id: str, quantity: int, price_per_unit: float,
@@ -8668,6 +9366,11 @@ class Database:
             return "invalid_drug"
         if quantity <= 0 or quantity > config.DRUG_MAX_LISTING_QTY or price_per_unit <= 0:
             return "invalid_amount"
+        from utils.dealer_ranks import can_list_on_market, dealer_rank
+
+        stats = await self.get_drug_stats(user_id, guild_id)
+        if not can_list_on_market(dealer_rank(stats["units_sold"])):
+            return "rank_locked"
         canonical_id = defn.drug_id
         async with self._write_lock:
             stored_id, available = await self._find_drug_inventory_qty(user_id, guild_id, canonical_id)
@@ -8784,6 +9487,7 @@ class Database:
                 "UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ? WHERE user_id = ? AND guild_id = ?",
                 (proceeds, proceeds, seller_id, guild_id),
             )
+            await self._increment_drug_units_sold_no_lock(seller_id, guild_id, quantity)
             await self.conn.execute(
                 """
                 INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
@@ -8887,6 +9591,7 @@ class Database:
                         "UPDATE users SET downed_until = 0 WHERE user_id = ? AND guild_id = ?",
                         (user_id, guild_id),
                     )
+            await self._apply_drug_synergy_buff_no_lock(user_id, guild_id)
             await self.conn.commit()
         buff_duration = drug_effect_duration(defn) if drug_has_timed_effect(defn) else None
         new_hp: float | None = None
@@ -8912,6 +9617,149 @@ class Database:
             "cc_immunity": defn.effect_cc_immunity,
             "attack_hp_risk_chance": defn.effect_attack_hp_risk_chance,
             "attack_hp_risk_pct": defn.effect_attack_hp_risk_pct,
+        }
+
+    # --- Crew cartel drug operations ----------------------------------------
+
+    async def get_cartel_stash(self, guild_id: int, crew_name: str) -> dict[str, int]:
+        cursor = await self.conn.execute(
+            """
+            SELECT drug_id, quantity FROM crew_cartel_stash
+            WHERE guild_id = ? AND crew_name = ? AND quantity > 0
+            """,
+            (guild_id, crew_name),
+        )
+        return {str(r["drug_id"]): int(r["quantity"]) for r in await cursor.fetchall()}
+
+    async def plant_cartel_drug(
+        self, user_id: int, guild_id: int, crew_name: str, drug_id: str,
+    ) -> tuple[float, str | None]:
+        from utils.drugs import drug_by_id
+
+        membership = await self.get_crew_membership(user_id, guild_id)
+        if membership is None or membership.lower() != crew_name.lower():
+            return 0.0, "not_in_crew"
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            return 0.0, "invalid_drug"
+        now = time.time()
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                "SELECT COUNT(*) AS c FROM crew_cartel_grows WHERE guild_id = ? AND crew_name = ?",
+                (guild_id, crew_name),
+            )
+            if int((await cursor.fetchone())["c"]) >= config.CARTEL_LAB_SLOTS:
+                await self.conn.commit()
+                return 0.0, "no_slots"
+            cursor = await self.conn.execute(
+                "SELECT treasury FROM crew_stats WHERE guild_id = ? AND crew_name = ?",
+                (guild_id, crew_name),
+            )
+            crew_row = await cursor.fetchone()
+            if crew_row is None or float(crew_row["treasury"]) < defn.seed_cost:
+                await self.conn.commit()
+                return defn.seed_cost, "insufficient_treasury"
+            await self.conn.execute(
+                "UPDATE crew_stats SET treasury = treasury - ? WHERE guild_id = ? AND crew_name = ?",
+                (defn.seed_cost, guild_id, crew_name),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO crew_cartel_grows (guild_id, crew_name, drug_id, planted_at, ready_at, yield_mult)
+                VALUES (?, ?, ?, ?, ?, 1.0)
+                """,
+                (guild_id, crew_name, defn.drug_id, now, now + defn.grow_seconds),
+            )
+            await self.conn.commit()
+        return defn.seed_cost, None
+
+    async def harvest_cartel(self, guild_id: int, crew_name: str) -> dict[str, int]:
+        from utils.drugs import drug_by_id, roll_yield
+
+        now = time.time()
+        harvested: dict[str, int] = {}
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT grow_id, drug_id, yield_mult FROM crew_cartel_grows
+                WHERE guild_id = ? AND crew_name = ? AND ready_at <= ?
+                """,
+                (guild_id, crew_name, now),
+            )
+            ready = await cursor.fetchall()
+            for row in ready:
+                grow_id = int(row["grow_id"])
+                drug_id = str(row["drug_id"])
+                defn = drug_by_id(drug_id)
+                if defn is None:
+                    await self.conn.execute("DELETE FROM crew_cartel_grows WHERE grow_id = ?", (grow_id,))
+                    continue
+                amount = roll_yield(defn, yield_mult=float(row["yield_mult"] or 1.0))
+                await self.conn.execute(
+                    """
+                    INSERT INTO crew_cartel_stash (guild_id, crew_name, drug_id, quantity)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(guild_id, crew_name, drug_id) DO UPDATE SET
+                        quantity = crew_cartel_stash.quantity + excluded.quantity
+                    """,
+                    (guild_id, crew_name, drug_id, amount),
+                )
+                await self.conn.execute("DELETE FROM crew_cartel_grows WHERE grow_id = ?", (grow_id,))
+                harvested[drug_id] = harvested.get(drug_id, 0) + amount
+            await self.conn.commit()
+        return harvested
+
+    async def cartel_street_sell(
+        self, user_id: int, guild_id: int, crew_name: str, drug_id: str, quantity: int,
+    ) -> dict[str, object]:
+        from utils.drugs import drug_by_id
+
+        membership = await self.get_crew_membership(user_id, guild_id)
+        if membership is None or membership.lower() != crew_name.lower():
+            return {"error": "not_in_crew"}
+        defn = drug_by_id(drug_id)
+        if defn is None or quantity <= 0:
+            return {"error": "invalid_amount"}
+        unit_price = defn.street_price * config.DRUG_WHOLESALE_PRICE_FACTOR
+        total = round(unit_price * quantity, 2)
+        crew_share = round(total * config.CARTEL_STREET_SELL_CREW_SHARE, 2)
+        player_share = round(total * config.CARTEL_STREET_SELL_PLAYER_SHARE, 2)
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT quantity FROM crew_cartel_stash
+                WHERE guild_id = ? AND crew_name = ? AND drug_id = ?
+                """,
+                (guild_id, crew_name, defn.drug_id),
+            )
+            stash = await cursor.fetchone()
+            if stash is None or int(stash["quantity"]) < quantity:
+                await self.conn.commit()
+                return {"error": "insufficient_product"}
+            await self.conn.execute(
+                """
+                UPDATE crew_cartel_stash SET quantity = quantity - ?
+                WHERE guild_id = ? AND crew_name = ? AND drug_id = ?
+                """,
+                (quantity, guild_id, crew_name, defn.drug_id),
+            )
+            await self.conn.execute(
+                "UPDATE crew_stats SET treasury = treasury + ? WHERE guild_id = ? AND crew_name = ?",
+                (crew_share, guild_id, crew_name),
+            )
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ? WHERE user_id = ? AND guild_id = ?",
+                (player_share, player_share, user_id, guild_id),
+            )
+            await self._increment_drug_units_sold_no_lock(user_id, guild_id, quantity)
+            await self.conn.commit()
+        return {
+            "error": None,
+            "total": total,
+            "crew_share": crew_share,
+            "player_share": player_share,
+            "quantity": quantity,
         }
 
     def _pending_drug_buff_payload(
@@ -9211,8 +10059,13 @@ class Database:
 
             result: dict[str, object] = {"error": None, "action": action.action_id, "cost": action.cost}
 
+            from utils.legacy_perks import action_duration_bonus_seconds
+
+            attacker_legacy = await self._list_legacy_perks_no_lock(attacker_id, guild_id)
+            duration_seconds = action.duration_seconds + action_duration_bonus_seconds(attacker_legacy)
+
             if action.kind == "buff":
-                ends_at = now + action.duration_seconds
+                ends_at = now + duration_seconds
                 await self.conn.execute(
                     """
                     INSERT INTO business_buffs (guild_id, user_id, buff_type, multiplier, ends_at)
@@ -9232,13 +10085,21 @@ class Database:
                             guild_id, defender_crew, "defense",
                         ),
                     )
+                acq_bonus = await self._security_acquisition_bonus_no_lock(int(target_id), guild_id)
                 rating = security_rating(
                     security_level=int(defender_biz["security"]),
                     branch_security_level=int(defender_biz["branch_security"]),
                     tier=int(defender_biz["tier"]),
+                    bonus=acq_bonus,
                 ) + corp_defense
                 penalty = effective_penalty(action.magnitude, rating)
-                ends_at = now + action.duration_seconds
+                attack_duration = duration_seconds
+                defender_acq = await self._list_completed_acquisitions_no_lock(int(target_id), guild_id)
+                if "private_security" in defender_acq:
+                    attack_duration *= 1.0 - float(
+                        config.EMPIRE_ACQUISITIONS["private_security"]["attack_duration_reduction"],
+                    )
+                ends_at = now + attack_duration
                 notify_expires = now + config.BUSINESS_DEFENSE_WINDOW_SECONDS
                 cursor = await self.conn.execute(
                     """

@@ -592,6 +592,15 @@ class CrewPanelView(discord.ui.View):
         embed = await build_war_standings_embed(self.cog, interaction.guild)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @discord.ui.button(label="🕶️ Cartel", style=discord.ButtonStyle.danger, row=4)
+    async def cartel_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        del button
+        from utils.cartel_ui import send_cartel_panel
+
+        await send_cartel_panel(interaction, self.cog)
+
 
 async def send_crew_panel(interaction: discord.Interaction, cog: Crews) -> None:
     if interaction.guild_id is None or interaction.guild is None:

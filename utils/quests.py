@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import config
 from utils.helpers import fmt_amount
 
 if TYPE_CHECKING:
@@ -42,11 +43,24 @@ DAILY_QUEST_POOL: tuple[QuestDef, ...] = (
     QuestDef("dungeon_clear", "Delver", "Clear a `/dungeon` run.", 1, 1_100.0, "dungeon_clear"),
     QuestDef("territory_claim", "Land Grab", "Claim or capture a territory.", 1, 1_200.0, "territory_claim"),
     QuestDef("territory_guards", "Mercenary", "Hire territory guards (any amount).", 1, 800.0, "territory_guards"),
+    QuestDef("biz_collect", "Empire Revenue", "Collect business revenue once.", 1, 700.0, "business_collect"),
+    QuestDef("biz_upgrade", "Reinvest", "Buy any business upgrade.", 1, 850.0, "business_upgrade"),
+    QuestDef("drug_harvest", "Lab Run", "Harvest a lab crop.", 1, 750.0, "drug_harvest"),
+    QuestDef("drug_sell", "Move Product", "Street sell or list on the black market.", 1, 800.0, "drug_sell"),
+    QuestDef("biz_action", "Market Mover", "Launch a business competitive action.", 1, 900.0, "business_action"),
+    QuestDef("corp_project", "Corp Investor", "Contribute to a crew corporate project.", 1, 1_000.0, "corp_project"),
+)
+
+EMPIRE_QUESTS: tuple[QuestDef, ...] = (
+    QuestDef("empire_create", "Open Shop", "Create a business with `/business create`.", 1, 1_000.0, "business_create"),
+    QuestDef("empire_upgrade", "First Upgrade", "Collect revenue and buy a business upgrade.", 1, 2_000.0, "business_upgrade"),
+    QuestDef("empire_plant", "Green Thumb", "Plant your first seed in `/drugs lab`.", 1, 1_500.0, "drug_plant"),
 )
 
 DAILY_QUEST_COUNT = 3
 TRACK_ONBOARDING = "onboarding"
 TRACK_DAILY = "daily"
+TRACK_EMPIRE = config.TRACK_EMPIRE
 
 
 def daily_reset_key(timestamp: float | None = None) -> str:
@@ -55,7 +69,7 @@ def daily_reset_key(timestamp: float | None = None) -> str:
 
 
 def quest_by_id(quest_id: str) -> QuestDef | None:
-    for quest in (*ONBOARDING_QUESTS, *DAILY_QUEST_POOL):
+    for quest in (*ONBOARDING_QUESTS, *DAILY_QUEST_POOL, *EMPIRE_QUESTS):
         if quest.quest_id == quest_id:
             return quest
     return None
@@ -70,6 +84,24 @@ def _progress_int(progress: object, key: str, default: int = 0) -> int:
 
 def is_veteran(progress: object) -> bool:
     return _progress_int(progress, "prestige_level") > 0 or _progress_int(progress, "bosses_killed") >= 3
+
+
+async def ensure_empire_quests(db: Database, guild_id: int, user_id: int) -> None:
+    onboard_done = await db.count_completed_quests(guild_id, user_id, TRACK_ONBOARDING) >= len(ONBOARDING_QUESTS)
+    if not onboard_done:
+        return
+    rows = await db.list_user_quests(guild_id, user_id, TRACK_EMPIRE)
+    if rows:
+        return
+    for quest in EMPIRE_QUESTS:
+        await db.upsert_user_quest(
+            guild_id,
+            user_id,
+            TRACK_EMPIRE,
+            quest.quest_id,
+            target=quest.target,
+            reset_key="",
+        )
 
 
 async def ensure_onboarding_quests(db: Database, guild_id: int, user_id: int) -> None:
@@ -116,19 +148,25 @@ async def record_quest_event(
     """Advance matching quests; return quest_ids newly completed this call."""
     progress = await db.get_user_progress(user_id, guild_id)
     tracks: list[str] = []
-    if is_veteran(progress):
-        await ensure_daily_quests(db, guild_id, user_id)
-        tracks.append(TRACK_DAILY)
+    await ensure_onboarding_quests(db, guild_id, user_id)
+    onboard_done = await db.count_completed_quests(
+        guild_id, user_id, TRACK_ONBOARDING,
+    ) >= len(ONBOARDING_QUESTS)
+    if not onboard_done:
+        tracks.append(TRACK_ONBOARDING)
     else:
-        await ensure_onboarding_quests(db, guild_id, user_id)
-        onboard_done = await db.count_completed_quests(
-            guild_id, user_id, TRACK_ONBOARDING
-        ) >= len(ONBOARDING_QUESTS)
-        if onboard_done:
+        await ensure_empire_quests(db, guild_id, user_id)
+        empire_done = await db.count_completed_quests(
+            guild_id, user_id, TRACK_EMPIRE,
+        ) >= len(EMPIRE_QUESTS)
+        if not empire_done:
+            tracks.append(TRACK_EMPIRE)
+        if is_veteran(progress):
             await ensure_daily_quests(db, guild_id, user_id)
             tracks.append(TRACK_DAILY)
-        else:
-            tracks.append(TRACK_ONBOARDING)
+        elif empire_done:
+            await ensure_daily_quests(db, guild_id, user_id)
+            tracks.append(TRACK_DAILY)
 
     completed_ids: list[str] = []
     for track in tracks:
@@ -167,5 +205,7 @@ def format_quest_lines(rows: list, *, track: str) -> list[str]:
     if not lines:
         if track == TRACK_ONBOARDING:
             return ["All onboarding quests complete!"]
+        if track == TRACK_EMPIRE:
+            return ["Empire tutorial complete!"]
         return ["No daily goals assigned yet. Run `/quests` to refresh."]
     return lines

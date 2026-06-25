@@ -69,12 +69,27 @@ def _active_drug_buff_lines(pending_buff: dict[str, object]) -> list[str]:
     return buff_parts
 
 
+async def user_lab_slot_count(cog: commands.Cog, user_id: int, guild_id: int) -> int:
+    from utils.dealer_ranks import dealer_rank, lab_slot_count
+    from utils.legacy_perks import extra_lab_slots_from_perks
+
+    stats = await cog.bot.db.get_drug_stats(user_id, guild_id)
+    rank = dealer_rank(stats["units_sold"])
+    legacy = await cog.bot.db.list_legacy_perks(user_id, guild_id)
+    return lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
+
+
 async def build_lab_embed(
     cog: commands.Cog, guild_id: int, user_id: int,
 ) -> tuple[discord.Embed, discord.File]:
     grows = await cog.bot.db.list_drug_grows(user_id, guild_id)
     inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
     pending_buff = await cog.bot.db.peek_pending_drug_buff(user_id, guild_id)
+    stats = await cog.bot.db.get_drug_stats(user_id, guild_id)
+    from utils.dealer_ranks import dealer_rank, next_rank_threshold, rank_title
+
+    rank = dealer_rank(stats["units_sold"])
+    max_slots = await user_lab_slot_count(cog, user_id, guild_id)
     now = time.time()
 
     embed = discord.Embed(
@@ -101,17 +116,17 @@ async def build_lab_embed(
                 ready_count += 1
             else:
                 lines.append(f"{emoji} **{name}** — ready <t:{int(ready_at)}:R>{fert_note}")
-        footer = f"{len(grows)}/{config.DRUG_LAB_SLOTS} slots used"
+        footer = f"{len(grows)}/{max_slots} slots used"
         if ready_count:
             footer += f" · {ready_count} ready"
         embed.add_field(name="Grow slots", value="\n".join(lines), inline=False)
-        embed.set_footer(text=footer)
     else:
         embed.add_field(
             name="Grow slots",
-            value=f"_Empty — plant a strain below ({config.DRUG_LAB_SLOTS} slots)._",
+            value=f"_Empty — plant a strain below ({max_slots} slots)._",
             inline=False,
         )
+        footer = ""
 
     if inventory:
         inv_lines = []
@@ -138,6 +153,11 @@ async def build_lab_embed(
     png = render_lab_image()
     file = discord.File(io.BytesIO(png), filename="lab.png")
     embed.set_image(url="attachment://lab.png")
+    next_thr = next_rank_threshold(rank)
+    rank_line = f"Dealer rank **{rank}** ({rank_title(rank)})"
+    if next_thr is not None:
+        rank_line += f" · {stats['units_sold']}/{next_thr} to next rank"
+    embed.set_footer(text=f"{footer} · {rank_line}" if footer else rank_line)
     return embed, file
 
 
@@ -429,13 +449,22 @@ class DrugLabView(discord.ui.View):
         harvested = await self.cog.bot.db.harvest_drugs(self.user_id, self.guild_id)
         view = await DrugLabView.build(self.cog, self.guild_id, self.user_id)
         embed, file = await build_lab_embed(self.cog, self.guild_id, self.user_id)
+        ach_msg = ""
         if harvested:
             await record_quest_event(self.cog.bot.db, self.guild_id, self.user_id, "drug_harvest")
+            from utils.achievements import ACHIEVEMENTS, format_unlock_message
+
+            if await self.cog.bot.db.unlock_achievement(
+                self.user_id, self.guild_id, "first_harvest",
+            ):
+                ach_msg = format_unlock_message([ACHIEVEMENTS["first_harvest"]])
+            else:
+                ach_msg = ""
             parts = []
             for drug_id, qty in harvested.items():
                 defn = drug_by_id(drug_id)
                 parts.append(f"{defn.emoji if defn else ''} {qty} {defn.name if defn else drug_id}")
-            embed.description = "🌾 Harvested " + ", ".join(parts) + "!"
+            embed.description = "🌾 Harvested " + ", ".join(parts) + "!" + (f"\n\n{ach_msg}" if ach_msg else "")
         else:
             embed.description = "Nothing ready to harvest yet."
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)

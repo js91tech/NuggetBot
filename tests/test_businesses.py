@@ -84,6 +84,19 @@ class BusinessMathTests(unittest.TestCase):
         c1 = upgrade_cost(1, 1)
         self.assertGreater(c1, c0)
 
+    def test_upgrade_cost_t7_reasonable(self) -> None:
+        """Max one T7 attribute should cost millions, not billions."""
+        total = sum(upgrade_cost(7, level) for level in range(config.BUSINESS_ATTRIBUTE_MAX))
+        self.assertLess(total, 50_000_000.0)
+        self.assertEqual(upgrade_cost(7, 0), 25_000.0)
+
+    def test_diminishing_reputation(self) -> None:
+        low = hourly_income(tier=7, reputation_level=5)
+        high = hourly_income(tier=7, reputation_level=15)
+        self.assertGreater(high, low)
+        # Level 15 should not be 3× level 5 (diminishing after 10)
+        self.assertLess(high / low, 2.5)
+
 
 class BusinessDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -682,6 +695,18 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         Path(self.db_path).unlink(missing_ok=True)
 
+    async def _unlock_market_rank(self, uid: int, guild_id: int) -> None:
+        """Seed dealer rank 3+ so black-market listing is allowed in tests."""
+        await self.db.conn.execute(
+            """
+            INSERT INTO user_drug_stats (user_id, guild_id, units_sold)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, guild_id) DO UPDATE SET units_sold = excluded.units_sold
+            """,
+            (uid, guild_id, config.DEALER_RANK_THRESHOLDS[2]),
+        )
+        await self.db.conn.commit()
+
     async def test_plant_requires_funds(self) -> None:
         guild_id, uid = 1, 100
         await self.db.ensure_user(uid, guild_id)
@@ -827,6 +852,7 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.ensure_user(seller, guild_id)
         await self.db.credit_wallet(buyer, guild_id, 100_000.0, apply_bonuses=False)
         await self._stock_product(seller, guild_id, "blue_dream", 10)
+        await self._unlock_market_rank(seller, guild_id)
         err = await self.db.create_drug_listing(seller, guild_id, "blue_dream", 5, 200.0)
         self.assertIsNone(err)
         listings = await self.db.list_drug_market(guild_id)
@@ -841,6 +867,7 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         guild_id, seller = 1, 100
         await self.db.ensure_user(seller, guild_id)
         await self._stock_product(seller, guild_id, "blue_dream", 10)
+        await self._unlock_market_rank(seller, guild_id)
         await self.db.create_drug_listing(seller, guild_id, "blue_dream", 5, 200.0)
         listings = await self.db.list_drug_market(guild_id)
         result = await self.db.buy_drug_listing(seller, guild_id, int(listings[0]["listing_id"]), 1)
@@ -850,6 +877,7 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         guild_id, seller = 1, 100
         await self.db.ensure_user(seller, guild_id)
         await self._stock_product(seller, guild_id, "blue_dream", 10)
+        await self._unlock_market_rank(seller, guild_id)
         await self.db.create_drug_listing(seller, guild_id, "blue_dream", 5, 200.0)
         listings = await self.db.list_drug_market(guild_id)
         err = await self.db.cancel_drug_listing(seller, guild_id, int(listings[0]["listing_id"]))
@@ -863,6 +891,8 @@ class DrugDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.ensure_user(other, guild_id)
         await self._stock_product(seller, guild_id, "wockhardt", 8)
         await self._stock_product(other, guild_id, "blue_dream", 5)
+        await self._unlock_market_rank(seller, guild_id)
+        await self._unlock_market_rank(other, guild_id)
         await self.db.create_drug_listing(seller, guild_id, "wockhardt", 3, 500.0)
         await self.db.create_drug_listing(other, guild_id, "blue_dream", 2, 150.0)
         mine = await self.db.list_user_drug_listings(seller, guild_id)

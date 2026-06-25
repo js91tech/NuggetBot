@@ -50,7 +50,7 @@ BUSINESS_TIERS: tuple[BusinessTierDef, ...] = (
         "Mass production. Smoke stacks and serious cash flow.",
     ),
     BusinessTierDef(
-        7, "corporation", "Corporation", 10_000_000.0, 250_000.0, "🏢",
+        7, "corporation", "Corporation", 5_000_000.0, 250_000.0, "🏢",
         "A towering empire. The peak of the corporate ladder.",
     ),
 )
@@ -103,14 +103,29 @@ def next_tier_def(tier: int) -> BusinessTierDef | None:
     return BUSINESS_TIERS_BY_NUMBER.get(int(tier) + 1)
 
 
+def _scaled_attribute_bonus(level: int, per_level: float) -> float:
+    """Linear bonus with diminishing returns after ``BUSINESS_ATTRIBUTE_DIMINISHING_AFTER``."""
+    lvl = max(0, int(level))
+    cap = config.BUSINESS_ATTRIBUTE_DIMINISHING_AFTER
+    factor = config.BUSINESS_ATTRIBUTE_DIMINISHING_FACTOR
+    full = min(lvl, cap)
+    reduced = max(0, lvl - cap)
+    return full * per_level + reduced * per_level * factor
+
+
 def efficiency_multiplier(efficiency_level: int) -> float:
     """Each efficiency level adds a flat percentage to output."""
-    return 1.0 + max(0, int(efficiency_level)) * config.BUSINESS_EFFICIENCY_BONUS_PER_LEVEL
+    return 1.0 + _scaled_attribute_bonus(
+        efficiency_level, config.BUSINESS_EFFICIENCY_BONUS_PER_LEVEL,
+    )
 
 
-def reputation_multiplier(reputation_level: int) -> float:
+def reputation_multiplier(reputation_level: int, *, effectiveness: float = 1.0) -> float:
     """Reputation drives customer traffic -> income."""
-    return 1.0 + max(0, int(reputation_level)) * config.BUSINESS_REPUTATION_BONUS_PER_LEVEL
+    return 1.0 + _scaled_attribute_bonus(
+        reputation_level,
+        config.BUSINESS_REPUTATION_BONUS_PER_LEVEL * max(0.0, effectiveness),
+    )
 
 
 def production_branch_multiplier(branch_level: int) -> float:
@@ -165,6 +180,7 @@ def hourly_income(
     satisfaction: int = 50,
     business_prestige: int = 0,
     district_mult: float = 1.0,
+    reputation_effectiveness: float = 1.0,
 ) -> float:
     """Effective income per hour after all multipliers.
 
@@ -183,7 +199,7 @@ def hourly_income(
     return (
         defn.base_income_per_hour
         * efficiency_multiplier(efficiency_level)
-        * reputation_multiplier(reputation_level)
+        * reputation_multiplier(reputation_level, effectiveness=reputation_effectiveness)
         * production_branch_multiplier(production_branch_level)
         * growth_branch_multiplier(growth_branch_level)
         * satisfaction_multiplier(satisfaction)
@@ -208,13 +224,11 @@ def accrue_income(
 
 def upgrade_cost(tier: int, current_level: int) -> float:
     """Escalating cost for the next attribute/branch level at a given tier."""
-    defn = tier_def(tier)
-    base = defn.purchase_cost if defn else config.BUSINESS_UPGRADE_BASE_COST
-    factor = config.BUSINESS_UPGRADE_COST_GROWTH ** max(0, int(current_level))
-    return round(
-        base * config.BUSINESS_UPGRADE_COST_FRACTION * factor,
-        2,
+    base = config.BUSINESS_UPGRADE_BASE_BY_TIER.get(
+        int(tier), config.BUSINESS_UPGRADE_BASE_COST,
     )
+    factor = config.BUSINESS_UPGRADE_COST_GROWTH ** max(0, int(current_level))
+    return round(base * factor, 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,10 +298,12 @@ def security_rating(
     security_level: int,
     branch_security_level: int,
     tier: int,
+    bonus: int = 0,
 ) -> int:
     """Resistance score used by the defense system (Phase 4)."""
     return (
         max(0, int(security_level)) * config.BUSINESS_SECURITY_PER_LEVEL
         + max(0, int(branch_security_level)) * config.BUSINESS_SECURITY_PER_BRANCH_LEVEL
         + max(0, int(tier))
+        + max(0, int(bonus))
     )

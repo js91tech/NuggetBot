@@ -456,7 +456,8 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· 📈 Growth branch & 🏗️ Production branch — **+income**/hr per level\n"
                     "· 🛡️ Security & 🔒 Security branch — **defense only** (no income)\n"
                     "· 📦 Capacity — **storage cap only** (no income)\n"
-                    "· 😀 Employee Satisfaction — income swing when it changes (starts at 50)",
+                    "· 😀 Employee Satisfaction — `/business manage` (wages, team events); "
+                    "drifts without care",
                     "**Districts** (`/business districts`) — relocate for an income bonus and "
                     "buy influence:\n" + "\n".join(district_lines),
                     "**Competition & defense** (`/business action`, `/business defend`)\n"

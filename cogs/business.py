@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import discord
 from discord import app_commands
@@ -21,10 +22,13 @@ class Business(commands.Cog):
         self.bot = bot
         self.business_income_tick.start()
         self.stock_market_tick.start()
+        self.district_war_tick.start()
+        self._last_district_war: dict[int, float] = {}
 
     def cog_unload(self) -> None:
         self.business_income_tick.cancel()
         self.stock_market_tick.cancel()
+        self.district_war_tick.cancel()
 
     business_group = app_commands.Group(
         name="business",
@@ -227,6 +231,111 @@ class Business(commands.Cog):
         from utils.mega_project_ui import send_mega_project_panel
 
         await send_mega_project_panel(interaction, self)
+
+    @business_group.command(
+        name="manage",
+        description="Manage employees: raise wages or host a team event.",
+    )
+    async def manage(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+        if guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        from utils.business_manage_ui import send_manage_panel
+
+        await send_manage_panel(interaction, self)
+
+    @business_group.command(
+        name="supplychain",
+        description="Set auto-funded drug supply chain (Tier 5+). Pass no drug to disable.",
+    )
+    @app_commands.describe(drug_id="Drug strain id from /drugs catalog, or leave empty to disable")
+    async def supplychain(
+        self,
+        interaction: discord.Interaction,
+        drug_id: str | None = None,
+    ) -> None:
+        guild_id = interaction.guild_id
+        if guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        err = await self.bot.db.set_supply_chain_drug(
+            interaction.user.id, guild_id, drug_id,
+        )
+        if err == "no_business":
+            await interaction.response.send_message("You don't own a business.", ephemeral=True)
+            return
+        if err == "tier_too_low":
+            await interaction.response.send_message(
+                f"Supply chain unlocks at business tier **{config.DRUG_SUPPLY_CHAIN_TIER_MIN}**.",
+                ephemeral=True,
+            )
+            return
+        if err == "invalid_drug":
+            await interaction.response.send_message("Unknown drug strain.", ephemeral=True)
+            return
+        if drug_id:
+            from utils.drugs import drug_by_id
+
+            defn = drug_by_id(drug_id)
+            name = defn.name if defn else drug_id
+            await interaction.response.send_message(
+                f"🔗 Supply chain set to **{name}**. Stored revenue will auto-buy seeds when slots are free.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message("Supply chain disabled.", ephemeral=True)
+
+    @business_group.command(
+        name="acquisitions",
+        description="Purchase sub-empire acquisitions after completing all mega projects.",
+    )
+    async def acquisitions(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        from utils.acquisition_ui import send_acquisition_panel
+
+        await send_acquisition_panel(interaction, self)
+
+    @business_group.command(
+        name="starter",
+        description="Guide to starting your business empire.",
+    )
+    async def starter(self, interaction: discord.Interaction) -> None:
+        defn = tier_def(1)
+        embed = discord.Embed(
+            title="🍋 Business Empire Starter Guide",
+            description=(
+                "1. **Create** — `/business create` opens a Lemon Stand.\n"
+                "2. **Collect** — passive revenue builds every 5 min; collect to your wallet.\n"
+                "3. **Upgrade** — reinvest in efficiency, reputation, and branches.\n"
+                "4. **Tier up** — climb 7 tiers to Corporation.\n"
+                "5. **Manage** — `/business manage` keeps employees happy (+/-15% income).\n"
+                "6. **Drugs** — `/drugs lab` runs parallel to your business for active income.\n"
+                "7. **Prestige** — at Corporation, reset for permanent +5%/level income."
+            ),
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=f"Lemon Stand costs {fmt_amount(defn.purchase_cost if defn else 500)}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @tasks.loop(seconds=config.DISTRICT_WAR_TICK_SECONDS)
+    async def district_war_tick(self) -> None:
+        now = time.time()
+        for guild in self.bot.guilds:
+            last = self._last_district_war.get(guild.id, 0.0)
+            if now - last < config.DISTRICT_WAR_TICK_SECONDS:
+                continue
+            try:
+                await self.bot.db.process_district_wars(guild.id)
+                self._last_district_war[guild.id] = now
+            except Exception:
+                logger.exception("district war tick failed guild=%s", guild.id)
+
+    @district_war_tick.before_loop
+    async def before_district_war_tick(self) -> None:
+        await self.bot.wait_until_ready()
 
     @tasks.loop(seconds=config.BUSINESS_INCOME_TICK_SECONDS)
     async def business_income_tick(self) -> None:

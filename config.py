@@ -545,16 +545,39 @@ BUSINESS_GROWTH_BRANCH_BONUS_PER_LEVEL = 0.08
 # Employee satisfaction is 0-100; this is the max +/- income swing at the edges.
 BUSINESS_SATISFACTION_SWING = 0.15
 BUSINESS_SATISFACTION_START = 50
+BUSINESS_SATISFACTION_DECAY_PER_DAY = 1.5
+BUSINESS_SATISFACTION_NEUTRAL = 50
+# /business manage actions
+BUSINESS_MANAGE_WAGE_COST_FRACTION = 0.02  # of effective hourly income
+BUSINESS_MANAGE_WAGE_SAT_GAIN = 10
+BUSINESS_MANAGE_EVENT_BASE_COST = 500.0
+BUSINESS_MANAGE_EVENT_COST_PER_TIER = 250.0
+BUSINESS_MANAGE_EVENT_SAT_GAIN = 10
+BUSINESS_MANAGE_EVENT_COOLDOWN_SECONDS = 12 * 3600
+BUSINESS_MANAGE_NEGLECT_PENALTY = 5
+BUSINESS_MANAGE_NEGLECT_HOURS = 24
 # Stored-income capacity: a base buffer of N hours plus extra per capacity level.
 BUSINESS_BASE_CAPACITY_HOURS = 8.0
 BUSINESS_CAPACITY_HOURS_PER_LEVEL = 4.0
 BUSINESS_MIN_CAPACITY = 100.0
-# Attribute / branch upgrade pricing (cost scales off the tier purchase price).
-BUSINESS_UPGRADE_BASE_COST = 500.0
-BUSINESS_UPGRADE_COST_FRACTION = 0.15
-BUSINESS_UPGRADE_COST_GROWTH = 1.6
-BUSINESS_ATTRIBUTE_MAX = 25
+# Attribute / branch upgrade pricing (tier-indexed base + soft exponential growth).
+BUSINESS_UPGRADE_BASE_COST = 500.0  # fallback when tier unknown
+BUSINESS_UPGRADE_BASE_BY_TIER: dict[int, float] = {
+    1: 50.0,
+    2: 150.0,
+    3: 500.0,
+    4: 2_500.0,
+    5: 8_000.0,
+    6: 15_000.0,
+    7: 25_000.0,
+}
+BUSINESS_UPGRADE_COST_FRACTION = 0.15  # legacy; unused by new formula
+BUSINESS_UPGRADE_COST_GROWTH = 1.35
+BUSINESS_ATTRIBUTE_MAX = 15
 BUSINESS_BRANCH_MAX = 5
+# Income attributes give full bonus per level up to this cap, then half bonus.
+BUSINESS_ATTRIBUTE_DIMINISHING_AFTER = 10
+BUSINESS_ATTRIBUTE_DIMINISHING_FACTOR = 0.5
 # Security rating inputs (used by the Phase 4 defense system).
 BUSINESS_SECURITY_PER_LEVEL = 2
 BUSINESS_SECURITY_PER_BRANCH_LEVEL = 5
@@ -641,6 +664,73 @@ BUSINESS_SEASONAL_EVENTS: dict[str, float] = {
 # Personal mega projects grant a permanent business income bonus on completion.
 MEGA_PROJECT_INCOME_BONUS_CAP = 1.0
 
+# --- Empire expansion (acquisitions, legacy, district wars) ----------------
+# Post-mega acquisition targets with unique passive perks.
+EMPIRE_ACQUISITIONS: dict[str, dict[str, float | str]] = {
+    "media_conglomerate": {
+        "name": "Media Conglomerate",
+        "emoji": "📺",
+        "cost": 50_000_000_000.0,
+        "reputation_bonus_factor": 0.10,
+    },
+    "private_security": {
+        "name": "Private Security Firm",
+        "emoji": "🛡️",
+        "cost": 75_000_000_000.0,
+        "security_bonus": 15.0,
+        "attack_duration_reduction": 0.10,
+    },
+    "pharma_lab": {
+        "name": "Pharma Lab",
+        "emoji": "💊",
+        "cost": 100_000_000_000.0,
+        "drug_grow_time_reduction": 0.25,
+    },
+}
+# Business prestige 10+ legacy perk picks (one per prestige cycle, permanent).
+BUSINESS_LEGACY_PERKS: dict[str, dict[str, float | str]] = {
+    "automation": {
+        "name": "Automation",
+        "emoji": "🤖",
+        "offline_accrual_bonus": 0.10,
+    },
+    "diversification": {
+        "name": "Diversification",
+        "emoji": "🧪",
+        "extra_lab_slots": 1.0,
+    },
+    "hostile_takeover": {
+        "name": "Hostile Takeover",
+        "emoji": "⚔️",
+        "action_duration_bonus_hours": 2.0,
+    },
+}
+# Weekly district control bonus for the dominant crew in each district.
+DISTRICT_WAR_TICK_SECONDS = 7 * 24 * 3600
+DISTRICT_WAR_CONTROL_BONUS = 0.05
+DISTRICT_WAR_CONTEST_COST = 15  # influence points
+# Business-drug cross-system integration
+DRUG_SYNERGY_BUFF_INCOME_BONUS = 0.02
+DRUG_SYNERGY_BUFF_DURATION_SECONDS = 3600
+DRUG_SYNERGY_BUFF_MAX_STACKS = 3
+DRUG_DISTRIBUTION_RAID_REDUCTION_PER_PRESTIGE = 0.05
+DRUG_DISTRIBUTION_RAID_REDUCTION_CAP = 0.25
+DRUG_SUPPLY_CHAIN_TIER_MIN = 5
+DRUG_SUPPLY_CHAIN_GROW_SLOWDOWN = 1.5  # grows take 50% longer when auto-funded
+DRUG_WHOLESALE_PRICE_FACTOR = 0.80  # fixed price, no raid risk
+# Dealer rank thresholds (total units sold) and unlocks
+DEALER_RANK_THRESHOLDS: tuple[int, ...] = (
+    0, 50, 200, 500, 1_500, 3_000, 7_500, 15_000, 30_000, 60_000,
+)
+DEALER_RANK_MARKET_UNLOCK = 3
+DEALER_RANK_EXTRA_LAB_SLOT = 5
+DEALER_RANK_WHOLESALE_UNLOCK = 7
+DEALER_RANK_CARTEL_TITLE = 10
+# Crew cartel drug mechanics
+CARTEL_LAB_SLOTS = 5
+CARTEL_STREET_SELL_CREW_SHARE = 0.80
+CARTEL_STREET_SELL_PLAYER_SHARE = 0.20
+
 # --- Drug trade (Phase 8) ---------------------------------------------------
 # In-fiction contraband economy: grow product in a lab, then sell on the street
 # or to other players. Risky, high-reward, consistent with the heist/bounty tone.
@@ -651,6 +741,10 @@ DRUG_RAID_LOSS_FRACTION = 0.5
 DRUG_MARKET_TAX = 0.05
 DRUG_INDUSTRIAL_YIELD_BONUS = 0.20
 DRUG_MAX_LISTING_QTY = 100_000
+
+# Empire quest track (after onboarding)
+TRACK_EMPIRE = "empire"
+EMPIRE_QUEST_COUNT = 3
 
 
 def custom_avatar_max_size_label() -> str:

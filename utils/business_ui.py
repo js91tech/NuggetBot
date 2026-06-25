@@ -369,6 +369,18 @@ class PrestigeConfirmView(discord.ui.View):
             return
         await record_quest_event(self.cog.bot.db, self.guild_id, self.user_id, "business_prestige")
         bonus = int(new_prestige * config.BUSINESS_PRESTIGE_INCOME_BONUS_PER_LEVEL * 100)
+        owned = await self.cog.bot.db.list_legacy_perks(self.user_id, self.guild_id)
+        if new_prestige >= config.BUSINESS_PRESTIGE_MAX_LEVEL and len(owned) < len(config.BUSINESS_LEGACY_PERKS):
+            from utils.legacy_perk_ui import LegacyPerkView, build_legacy_pick_embed
+
+            embed = build_legacy_pick_embed(owned)
+            embed.description = (
+                f"⭐ **Prestige {new_prestige}!** Permanent **+{bonus}%** business income.\n\n"
+                + (embed.description or "")
+            )
+            view = LegacyPerkView(self.cog, self.guild_id, self.user_id, owned)
+            await interaction.response.edit_message(content=None, embed=embed, view=view)
+            return
         await interaction.response.edit_message(
             content=(
                 f"⭐ **Prestige {new_prestige}!** Your empire restarts as a Lemon Stand "

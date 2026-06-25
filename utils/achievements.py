@@ -49,6 +49,16 @@ ACHIEVEMENTS: dict[str, Achievement] = {
         "Your crew holds 3 zones at once.",
         "👑",
     ),
+    "first_harvest": Achievement("first_harvest", "First Harvest", "Harvest your first lab crop.", "🌿"),
+    "corporation_owner": Achievement(
+        "corporation_owner", "Corporation Owner", "Reach the Corporation business tier.", "🏢",
+    ),
+    "cartel_king": Achievement(
+        "cartel_king", "Cartel King", "Reach dealer rank 10.", "🕶️",
+    ),
+    "district_dominator": Achievement(
+        "district_dominator", "District Dominator", "Reach 100 district influence.", "🗺️",
+    ),
 }
 
 
@@ -140,6 +150,25 @@ async def evaluate_unlocks(
         held = await db.count_crew_territories(guild_id, crew_name)
         if held >= config.TERRITORY_MAX_HELD_PER_CREW:
             await grant("crew_territory_barons")
+
+    biz = await db.get_business(user_id, guild_id)
+    if biz is not None and int(biz["tier"]) >= 7:
+        await grant("corporation_owner")
+
+    drug_stats = await db.get_drug_stats(user_id, guild_id)
+    from utils.dealer_ranks import dealer_rank
+
+    if dealer_rank(drug_stats["units_sold"]) >= config.DEALER_RANK_CARTEL_TITLE:
+        await grant("cartel_king")
+
+    total_influence = 0.0
+    from utils.districts import DISTRICT_MAP
+
+    for district_id in DISTRICT_MAP:
+        inf = await db.get_user_district_influence(user_id, guild_id, district_id)
+        total_influence += inf
+    if total_influence >= config.BUSINESS_DISTRICT_INFLUENCE_MAX:
+        await grant("district_dominator")
 
     return newly
 

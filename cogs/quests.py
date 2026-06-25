@@ -6,10 +6,13 @@ from discord.ext import commands
 
 from utils.helpers import guild_only_message
 from utils.quests import (
+    EMPIRE_QUESTS,
     ONBOARDING_QUESTS,
     TRACK_DAILY,
+    TRACK_EMPIRE,
     TRACK_ONBOARDING,
     ensure_daily_quests,
+    ensure_empire_quests,
     ensure_onboarding_quests,
     format_quest_lines,
     is_veteran,
@@ -30,47 +33,64 @@ class Quests(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
 
-        progress = await self.bot.db.get_user_progress(interaction.user.id, interaction.guild_id)
-        veteran = is_veteran(progress)
-        if veteran:
-            await ensure_daily_quests(self.bot.db, interaction.guild_id, interaction.user.id)
-            daily_rows = await self.bot.db.list_user_quests(
-                interaction.guild_id, interaction.user.id, TRACK_DAILY
-            )
-            embed = discord.Embed(
-                title="Daily goals",
-                description="\n".join(format_quest_lines(daily_rows, track=TRACK_DAILY)),
-                color=discord.Color.blue(),
-            )
-            embed.set_footer(text="Resets at UTC midnight · Rewards pay on completion")
-        else:
-            await ensure_onboarding_quests(
-                self.bot.db, interaction.guild_id, interaction.user.id
-            )
+        await ensure_onboarding_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+        onboard_done = await self.bot.db.count_completed_quests(
+            interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
+        ) >= len(ONBOARDING_QUESTS)
+
+        embeds: list[discord.Embed] = []
+        if not onboard_done:
             onboard_rows = await self.bot.db.list_user_quests(
-                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING
+                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
             )
             done = await self.bot.db.count_completed_quests(
-                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING
+                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
             )
             embed = discord.Embed(
                 title="New raider onboarding",
                 description="\n".join(format_quest_lines(onboard_rows, track=TRACK_ONBOARDING)),
                 color=discord.Color.green(),
             )
-            embed.add_field(
-                name="Progress",
-                value=f"{done}/{len(ONBOARDING_QUESTS)} complete",
-                inline=False,
-            )
-            if done >= len(ONBOARDING_QUESTS):
-                embed.add_field(
-                    name="Next up",
-                    value="You unlocked **daily goals** — check back tomorrow or after UTC midnight.",
-                    inline=False,
+            embed.add_field(name="Progress", value=f"{done}/{len(ONBOARDING_QUESTS)} complete", inline=False)
+            embeds.append(embed)
+        else:
+            await ensure_empire_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+            empire_done = await self.bot.db.count_completed_quests(
+                interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
+            ) >= len(EMPIRE_QUESTS)
+            if not empire_done:
+                empire_rows = await self.bot.db.list_user_quests(
+                    interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
                 )
+                done = await self.bot.db.count_completed_quests(
+                    interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
+                )
+                embed = discord.Embed(
+                    title="Empire tutorial",
+                    description="\n".join(format_quest_lines(empire_rows, track=TRACK_EMPIRE)),
+                    color=discord.Color.dark_green(),
+                )
+                embed.add_field(name="Progress", value=f"{done}/{len(EMPIRE_QUESTS)} complete", inline=False)
+                embeds.append(embed)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        progress = await self.bot.db.get_user_progress(interaction.user.id, interaction.guild_id)
+        if is_veteran(progress) or onboard_done:
+            await ensure_daily_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+            daily_rows = await self.bot.db.list_user_quests(
+                interaction.guild_id, interaction.user.id, TRACK_DAILY,
+            )
+            daily_embed = discord.Embed(
+                title="Daily goals",
+                description="\n".join(format_quest_lines(daily_rows, track=TRACK_DAILY)),
+                color=discord.Color.blue(),
+            )
+            daily_embed.set_footer(text="Resets at UTC midnight · Rewards pay on completion")
+            embeds.append(daily_embed)
+
+        if not embeds:
+            embeds.append(discord.Embed(title="Quests", description="No active quests.", color=discord.Color.greyple()))
+
+        await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
     @app_commands.command(
         name="quest-hint",
@@ -82,19 +102,31 @@ class Quests(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
 
-        progress = await self.bot.db.get_user_progress(interaction.user.id, interaction.guild_id)
-        if is_veteran(progress):
-            await ensure_daily_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+        await ensure_onboarding_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+        onboard_done = await self.bot.db.count_completed_quests(
+            interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
+        ) >= len(ONBOARDING_QUESTS)
+        if not onboard_done:
             rows = await self.bot.db.list_user_quests(
-                interaction.guild_id, interaction.user.id, TRACK_DAILY
+                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
             )
+            track = TRACK_ONBOARDING
         else:
-            await ensure_onboarding_quests(
-                self.bot.db, interaction.guild_id, interaction.user.id
-            )
-            rows = await self.bot.db.list_user_quests(
-                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING
-            )
+            await ensure_empire_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+            empire_done = await self.bot.db.count_completed_quests(
+                interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
+            ) >= len(EMPIRE_QUESTS)
+            if not empire_done:
+                rows = await self.bot.db.list_user_quests(
+                    interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
+                )
+                track = TRACK_EMPIRE
+            else:
+                await ensure_daily_quests(self.bot.db, interaction.guild_id, interaction.user.id)
+                rows = await self.bot.db.list_user_quests(
+                    interaction.guild_id, interaction.user.id, TRACK_DAILY,
+                )
+                track = TRACK_DAILY
 
         pending = [row for row in rows if row["completed_at"] is None]
         if not pending:
@@ -104,7 +136,7 @@ class Quests(commands.Cog):
             )
             return
 
-        lines = format_quest_lines(pending[:1], track=TRACK_DAILY)
+        lines = format_quest_lines(pending[:1], track=track)
         await interaction.response.send_message(lines[0], ephemeral=True)
 
 
