@@ -19,7 +19,7 @@ from utils.drugs import (
     drugs_for_category,
     format_consume_message,
 )
-from utils.helpers import fmt_amount
+from utils.helpers import clip_embed_field, fmt_amount
 from utils.quests import record_quest_event
 
 if TYPE_CHECKING:
@@ -170,7 +170,7 @@ async def build_lab_embed(
         footer = f"{len(grows)}/{max_slots} slots used"
         if ready_count:
             footer += f" · {ready_count} ready"
-        embed.add_field(name="Grow slots", value="\n".join(lines), inline=False)
+        embed.add_field(name="Grow slots", value=clip_embed_field("\n".join(lines)), inline=False)
     else:
         embed.add_field(
             name="Grow slots",
@@ -188,15 +188,15 @@ async def build_lab_embed(
             price = defn.street_price if defn else 0
             effect = f" · _{defn.effect_summary}_" if defn else ""
             inv_lines.append(f"{emoji} **{name}** ×{qty} · ~{fmt_amount(price)}/unit{effect}")
-        embed.add_field(name="Stash", value="\n".join(inv_lines), inline=False)
+        embed.add_field(name="Stash", value=clip_embed_field("\n".join(inv_lines)), inline=False)
 
     if pending_buff:
         buff_parts = _active_drug_buff_lines(pending_buff)
         embed.add_field(
             name="Active high",
-            value=(
+            value=clip_embed_field(
                 f"**{pending_buff['name']}** — {' · '.join(buff_parts)} "
-                f"· expires <t:{int(float(pending_buff['expires']))}:R>"
+                f"· expires <t:{int(float(pending_buff['expires']))}:R>",
             ),
             inline=False,
         )
@@ -921,9 +921,9 @@ async def build_stash_embed(
         buff_parts = _active_drug_buff_lines(pending_buff)
         embed.add_field(
             name="Active high",
-            value=(
+            value=clip_embed_field(
                 f"**{pending_buff['name']}** — {' · '.join(buff_parts)} "
-                f"· expires <t:{int(float(pending_buff['expires']))}:R>"
+                f"· expires <t:{int(float(pending_buff['expires']))}:R>",
             ),
             inline=False,
         )
@@ -938,16 +938,36 @@ async def send_drug_lab_panel(interaction: discord.Interaction, cog: commands.Co
     try:
         embed, file = await build_lab_embed(cog, interaction.guild_id, interaction.user.id)
         view = await DrugLabView.build(cog, interaction.guild_id, interaction.user.id)
-        await interaction.followup.send(embed=embed, file=file, view=view, ephemeral=True)
     except Exception:
         logger.exception(
-            "drug lab panel open failed user=%s guild=%s",
+            "drug lab panel build failed user=%s guild=%s",
             interaction.user.id,
             interaction.guild_id,
         )
         await interaction.followup.send(
             "Could not open the lab — try again in a moment.", ephemeral=True,
         )
+        return
+    try:
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    except discord.HTTPException:
+        logger.exception(
+            "drug lab panel send failed user=%s guild=%s",
+            interaction.user.id,
+            interaction.guild_id,
+        )
+        try:
+            embed.set_image(url=None)
+            await interaction.followup.send(embed=embed, view=view)
+        except Exception:
+            logger.exception(
+                "drug lab panel fallback send failed user=%s guild=%s",
+                interaction.user.id,
+                interaction.guild_id,
+            )
+            await interaction.followup.send(
+                "Could not open the lab — try again in a moment.", ephemeral=True,
+            )
 
 
 async def send_drug_market_panel(interaction: discord.Interaction, cog: commands.Cog) -> None:
