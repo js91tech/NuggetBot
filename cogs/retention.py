@@ -247,6 +247,129 @@ class Retention(commands.Cog):
             embed.add_field(name=title, value="\n".join(lines), inline=False)
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="calendar", description="Claim today's login calendar reward (7-day cycle).")
+    @app_commands.guild_only()
+    async def calendar(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        now = time.time()
+        state = await self.bot.db.get_calendar_state(interaction.user.id, interaction.guild_id)
+        reward, day, err = await self.bot.db.claim_calendar(
+            interaction.user.id, interaction.guild_id, now,
+        )
+        if err == "cooldown":
+            last = float(state["last_claim"])
+            remaining = (last + config.CALENDAR_CLAIM_COOLDOWN_SECONDS) - now
+            hours = int(max(0, remaining) // 3600)
+            mins = int((max(0, remaining) % 3600) // 60)
+            await interaction.response.send_message(
+                f"Calendar already claimed. Next slot in **{hours}h {mins}m**.",
+                ephemeral=True,
+            )
+            return
+        lines = [
+            f"**Day {day}/{config.CALENDAR_CYCLE_DAYS}** — you received **{fmt_amount(reward or 0)}**!",
+        ]
+        if day < config.CALENDAR_CYCLE_DAYS:
+            next_reward = config.CALENDAR_REWARDS[day]
+            lines.append(f"Tomorrow: **{fmt_amount(next_reward)}** if you claim on time.")
+        else:
+            lines.append("Cycle complete — tomorrow starts back at day 1.")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    @app_commands.command(name="pass", description="Monthly activity pass progress and rewards.")
+    @app_commands.describe(action="View progress or claim unlocked tiers")
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Status", value="status"),
+            app_commands.Choice(name="Claim rewards", value="claim"),
+        ],
+    )
+    @app_commands.guild_only()
+    async def pass_cmd(self, interaction: discord.Interaction, action: str = "status") -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        uid = interaction.user.id
+        gid = interaction.guild_id
+        if action == "claim":
+            total, tiers = await self.bot.db.claim_pass_tiers(uid, gid)
+            if not tiers:
+                await interaction.response.send_message(
+                    "No pass rewards ready. Earn activity XP (chat, VC, raids) to unlock tiers.",
+                    ephemeral=True,
+                )
+                return
+            tier_nums = ", ".join(str(t + 1) for t in tiers)
+            await interaction.response.send_message(
+                f"Claimed pass tiers **{tier_nums}** for **{fmt_amount(total)}**!",
+                ephemeral=True,
+            )
+            return
+
+        state = await self.bot.db.get_pass_state(uid, gid)
+        pass_xp = state["pass_xp"]
+        mask = state["claimed_mask"]
+        month = self.bot.db.current_pass_reset_key()
+        embed = discord.Embed(
+            title=f"Activity pass — {month}",
+            description="Earn activity XP this month to unlock free nugget tiers.",
+            color=discord.Color.gold(),
+        )
+        embed.add_field(name="Pass XP", value=f"**{pass_xp:,}**", inline=True)
+        tier_lines: list[str] = []
+        for i, need in enumerate(config.PASS_TIER_XP):
+            if i >= len(config.PASS_TIER_REWARDS):
+                break
+            reward = config.PASS_TIER_REWARDS[i]
+            if mask & (1 << i):
+                status = "✅ claimed"
+            elif pass_xp >= need:
+                status = "🎁 **ready**"
+            else:
+                status = f"{pass_xp:,}/{need:,} XP"
+            tier_lines.append(f"**T{i + 1}** — {fmt_amount(reward)} · {status}")
+        embed.add_field(name="Tiers", value="\n".join(tier_lines), inline=False)
+        embed.set_footer(text="Use /pass → Claim rewards when tiers are ready")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="refer", description="Your invite code or redeem a friend's code.")
+    @app_commands.describe(code="Friend's referral code (omit to see yours)")
+    @app_commands.guild_only()
+    async def refer(self, interaction: discord.Interaction, code: str | None = None) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if code:
+            err = await self.bot.db.apply_referral_code(
+                interaction.user.id, interaction.guild_id, code,
+            )
+            errors = {
+                "invalid_code": "That referral code doesn't exist.",
+                "already_referred": "You already used a referral code.",
+                "self_referral": "You can't use your own code.",
+            }
+            if err:
+                await interaction.response.send_message(errors.get(err, "Could not apply code."), ephemeral=True)
+                return
+            await interaction.response.send_message(
+                f"Code applied! You received **{fmt_amount(config.REFERRAL_REFEREE_REWARD)}** "
+                f"(referrer gets **{fmt_amount(config.REFERRAL_REFERRER_REWARD)}**).",
+                ephemeral=True,
+            )
+            return
+        my_code = await self.bot.db.ensure_referral_code(
+            interaction.user.id, interaction.guild_id,
+        )
+        await interaction.response.send_message(
+            f"Your referral code: **`{my_code}`**\n"
+            f"New players run `/refer code:{my_code}` — you each earn "
+            f"**{fmt_amount(config.REFERRAL_REFERRER_REWARD)}** / "
+            f"**{fmt_amount(config.REFERRAL_REFEREE_REWARD)}**.",
+            ephemeral=True,
+        )
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Retention(bot))

@@ -505,6 +505,58 @@ class Database:
         await self._migrate_drug_grow_fertilizer()
         await self._migrate_empire_expansion()
         await self._migrate_tier1_retention()
+        await self._migrate_tier2_retention()
+
+    async def _migrate_tier2_retention(self) -> None:
+        """Weekly challenges support, login calendar, activity pass, referrals."""
+        user_cols = [
+            ("calendar_day", "INTEGER NOT NULL DEFAULT 0"),
+            ("calendar_last_claim", "REAL NOT NULL DEFAULT 0"),
+            ("pass_xp", "INTEGER NOT NULL DEFAULT 0 CHECK (pass_xp >= 0)"),
+            ("pass_claimed_mask", "INTEGER NOT NULL DEFAULT 0"),
+            ("pass_reset_key", "TEXT NOT NULL DEFAULT ''"),
+            ("referral_code", "TEXT"),
+            ("referred_by", "BIGINT"),
+        ]
+        if self.is_postgres:
+            for col, typedef in user_cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'users' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in user_cols:
+                if col not in existing:
+                    await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
+
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_referrals (
+                guild_id BIGINT NOT NULL,
+                referee_id BIGINT NOT NULL,
+                referrer_id BIGINT NOT NULL,
+                code_used TEXT NOT NULL,
+                rewarded_at REAL NOT NULL,
+                PRIMARY KEY (guild_id, referee_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_users_referral_code
+            ON users(guild_id, referral_code)
+            WHERE referral_code IS NOT NULL
+            """,
+        )
+        await self.conn.commit()
 
     async def _migrate_tier1_retention(self) -> None:
         """Daily streaks, activity XP, trades, weekly stats, notification prefs."""
@@ -12025,6 +12077,7 @@ class Database:
                 "UPDATE users SET activity_xp = ? WHERE user_id = ? AND guild_id = ?",
                 (new_xp, user_id, guild_id),
             )
+            await self._add_pass_xp_no_lock(user_id, guild_id, gain)
             await self.conn.commit()
         new_level, _, _ = level_from_total_xp(new_xp)
         return new_xp, old_level, new_level
@@ -12537,3 +12590,288 @@ class Database:
             (guild_id, now, now),
         )
         return list(await cursor.fetchall())
+
+    # --- Tier 2 retention: calendar, activity pass, referrals ---
+
+    @staticmethod
+    def current_pass_reset_key(ts: float | None = None) -> str:
+        ts = time.time() if ts is None else ts
+        return time.strftime("%Y-%m", time.gmtime(ts))
+
+    async def _add_pass_xp_no_lock(self, user_id: int, guild_id: int, amount: int) -> None:
+        gain = max(0, int(amount))
+        if gain <= 0:
+            return
+        reset_key = self.current_pass_reset_key()
+        cursor = await self.conn.execute(
+            """
+            SELECT pass_xp, pass_reset_key FROM users
+            WHERE user_id = ? AND guild_id = ?
+            """,
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        current = int(row["pass_xp"]) if row else 0
+        stored_key = str(row["pass_reset_key"] or "") if row else ""
+        if stored_key != reset_key:
+            current = 0
+        await self.conn.execute(
+            """
+            UPDATE users
+            SET pass_xp = ?, pass_reset_key = ?,
+                pass_claimed_mask = CASE
+                    WHEN pass_reset_key != ? THEN 0
+                    ELSE pass_claimed_mask
+                END
+            WHERE user_id = ? AND guild_id = ?
+            """,
+            (current + gain, reset_key, reset_key, user_id, guild_id),
+        )
+
+    async def get_pass_state(self, user_id: int, guild_id: int) -> dict[str, int]:
+        await self.ensure_user(user_id, guild_id)
+        reset_key = self.current_pass_reset_key()
+        cursor = await self.conn.execute(
+            """
+            SELECT pass_xp, pass_claimed_mask, pass_reset_key FROM users
+            WHERE user_id = ? AND guild_id = ?
+            """,
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return {"pass_xp": 0, "claimed_mask": 0}
+        stored_key = str(row["pass_reset_key"] or "")
+        if stored_key != reset_key:
+            return {"pass_xp": 0, "claimed_mask": 0}
+        return {
+            "pass_xp": int(row["pass_xp"]),
+            "claimed_mask": int(row["pass_claimed_mask"]),
+        }
+
+    async def claim_pass_tiers(self, user_id: int, guild_id: int) -> tuple[float, list[int]]:
+        """Claim all unclaimed pass tiers. Returns (total_reward, tier_indices)."""
+        reset_key = self.current_pass_reset_key()
+        total_reward = 0.0
+        claimed: list[int] = []
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                """
+                SELECT pass_xp, pass_claimed_mask, pass_reset_key FROM users
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await self.conn.commit()
+                return 0.0, []
+            stored_key = str(row["pass_reset_key"] or "")
+            pass_xp = int(row["pass_xp"]) if stored_key == reset_key else 0
+            mask = int(row["pass_claimed_mask"]) if stored_key == reset_key else 0
+            new_mask = mask
+            for i, need in enumerate(config.PASS_TIER_XP):
+                if i >= len(config.PASS_TIER_REWARDS):
+                    break
+                if pass_xp < need:
+                    break
+                if mask & (1 << i):
+                    continue
+                reward = float(config.PASS_TIER_REWARDS[i])
+                total_reward += reward
+                claimed.append(i)
+                new_mask |= 1 << i
+            if not claimed:
+                await self.conn.commit()
+                return 0.0, []
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet + ?, total_earned = total_earned + ?,
+                    pass_claimed_mask = ?, pass_reset_key = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (total_reward, total_reward, new_mask, reset_key, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return total_reward, claimed
+
+    async def get_calendar_state(self, user_id: int, guild_id: int) -> dict[str, float | int]:
+        await self.ensure_user(user_id, guild_id)
+        cursor = await self.conn.execute(
+            """
+            SELECT calendar_day, calendar_last_claim FROM users
+            WHERE user_id = ? AND guild_id = ?
+            """,
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return {"day": 0, "last_claim": 0.0}
+        return {
+            "day": int(row["calendar_day"]),
+            "last_claim": float(row["calendar_last_claim"]),
+        }
+
+    async def claim_calendar(
+        self, user_id: int, guild_id: int, timestamp: float,
+    ) -> tuple[float | None, int, str | None]:
+        """Return (reward, new_day, error). error 'cooldown' if too soon."""
+        income_mult = await self.get_income_multiplier(user_id, guild_id)
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                """
+                SELECT calendar_day, calendar_last_claim FROM users
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            current_day = int(row["calendar_day"]) if row else 0
+            last_claim = float(row["calendar_last_claim"]) if row else 0.0
+            if last_claim > 0:
+                elapsed = timestamp - last_claim
+                if elapsed < config.CALENDAR_CLAIM_COOLDOWN_SECONDS:
+                    await self.conn.commit()
+                    return None, current_day, "cooldown"
+                window = config.CALENDAR_CLAIM_COOLDOWN_SECONDS + config.CALENDAR_GRACE_SECONDS
+                if elapsed <= window and current_day > 0:
+                    new_day = (current_day % config.CALENDAR_CYCLE_DAYS) + 1
+                else:
+                    new_day = 1
+            else:
+                new_day = 1
+            reward = float(config.CALENDAR_REWARDS[min(new_day - 1, len(config.CALENDAR_REWARDS) - 1)])
+            bonus_reward = reward * income_mult
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet + ?, total_earned = total_earned + ?,
+                    calendar_day = ?, calendar_last_claim = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (bonus_reward, bonus_reward, new_day, timestamp, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return bonus_reward, new_day, None
+
+    @staticmethod
+    def _generate_referral_code(user_id: int, guild_id: int) -> str:
+        import hashlib
+
+        digest = hashlib.sha256(f"{user_id}:{guild_id}:refer".encode()).hexdigest()
+        chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        num = int(digest[:12], 16)
+        code = ""
+        for _ in range(config.REFERRAL_CODE_LENGTH):
+            code += chars[num % len(chars)]
+            num //= len(chars)
+        return code
+
+    async def ensure_referral_code(self, user_id: int, guild_id: int) -> str:
+        await self.ensure_user(user_id, guild_id)
+        cursor = await self.conn.execute(
+            "SELECT referral_code FROM users WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        if row is not None and row["referral_code"]:
+            return str(row["referral_code"])
+        for attempt in range(8):
+            code = self._generate_referral_code(user_id + attempt, guild_id)
+            async with self._write_lock:
+                dup = await self.conn.execute(
+                    "SELECT user_id FROM users WHERE guild_id = ? AND referral_code = ?",
+                    (guild_id, code),
+                )
+                if await dup.fetchone() is not None:
+                    continue
+                await self.conn.execute(
+                    "UPDATE users SET referral_code = ? WHERE user_id = ? AND guild_id = ?",
+                    (code, user_id, guild_id),
+                )
+                await self.conn.commit()
+                return code
+        code = self._generate_referral_code(user_id, guild_id)
+        async with self._write_lock:
+            await self.conn.execute(
+                "UPDATE users SET referral_code = ? WHERE user_id = ? AND guild_id = ?",
+                (code, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return code
+
+    async def apply_referral_code(
+        self, referee_id: int, guild_id: int, code: str,
+    ) -> str | None:
+        normalized = code.strip().upper()
+        if not normalized:
+            return "invalid_code"
+        async with self._write_lock:
+            await self._ensure_user_no_lock(referee_id, guild_id)
+            ref_cursor = await self.conn.execute(
+                "SELECT referred_by FROM users WHERE user_id = ? AND guild_id = ?",
+                (referee_id, guild_id),
+            )
+            ref_row = await ref_cursor.fetchone()
+            if ref_row is not None and ref_row["referred_by"] is not None:
+                await self.conn.commit()
+                return "already_referred"
+            existing = await self.conn.execute(
+                "SELECT referee_id FROM user_referrals WHERE guild_id = ? AND referee_id = ?",
+                (guild_id, referee_id),
+            )
+            if await existing.fetchone() is not None:
+                await self.conn.commit()
+                return "already_referred"
+            cursor = await self.conn.execute(
+                """
+                SELECT user_id FROM users
+                WHERE guild_id = ? AND referral_code = ?
+                """,
+                (guild_id, normalized),
+            )
+            referrer_row = await cursor.fetchone()
+            if referrer_row is None:
+                await self.conn.commit()
+                return "invalid_code"
+            referrer_id = int(referrer_row["user_id"])
+            if referrer_id == referee_id:
+                await self.conn.commit()
+                return "self_referral"
+            await self._ensure_user_no_lock(referrer_id, guild_id)
+            now = time.time()
+            await self.conn.execute(
+                """
+                INSERT INTO user_referrals (guild_id, referee_id, referrer_id, code_used, rewarded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (guild_id, referee_id, referrer_id, normalized, now),
+            )
+            await self.conn.execute(
+                "UPDATE users SET referred_by = ? WHERE user_id = ? AND guild_id = ?",
+                (referrer_id, referee_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (config.REFERRAL_REFEREE_REWARD, config.REFERRAL_REFEREE_REWARD, referee_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (
+                    config.REFERRAL_REFERRER_REWARD,
+                    config.REFERRAL_REFERRER_REWARD,
+                    referrer_id,
+                    guild_id,
+                ),
+            )
+            await self.conn.commit()
+        return None
