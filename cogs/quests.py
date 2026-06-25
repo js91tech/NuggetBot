@@ -4,18 +4,22 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import config
 from utils.helpers import guild_only_message
 from utils.quests import (
     EMPIRE_QUESTS,
     ONBOARDING_QUESTS,
     TRACK_DAILY,
+    TRACK_CONTRACT,
     TRACK_EMPIRE,
     TRACK_ONBOARDING,
     TRACK_WEEKLY,
+    ensure_contract_quest,
     ensure_daily_quests,
     ensure_empire_quests,
     ensure_onboarding_quests,
     ensure_weekly_quests,
+    contract_reset_key,
     format_quest_lines,
     is_veteran,
     weekly_reset_key,
@@ -103,6 +107,20 @@ class Quests(commands.Cog):
                 text=f"Resets {weekly_reset_key()} · Bigger rewards than dailies",
             )
             embeds.append(weekly_embed)
+
+            await ensure_contract_quest(self.bot.db, interaction.guild_id, interaction.user.id)
+            contract_rows = await self.bot.db.list_user_quests(
+                interaction.guild_id, interaction.user.id, TRACK_CONTRACT,
+            )
+            contract_embed = discord.Embed(
+                title="Active contract",
+                description="\n".join(format_quest_lines(contract_rows, track=TRACK_CONTRACT)),
+                color=discord.Color.dark_red(),
+            )
+            contract_embed.set_footer(
+                text=f"Resets every {config.CONTRACT_RESET_DAYS}d · period {contract_reset_key()}",
+            )
+            embeds.append(contract_embed)
 
         if not embeds:
             embeds.append(discord.Embed(title="Quests", description="No active quests.", color=discord.Color.greyple()))

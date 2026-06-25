@@ -64,6 +64,14 @@ WEEKLY_QUEST_POOL: tuple[QuestDef, ...] = (
     QuestDef("wk_gamble", "High Roller", "Play gambling 8 times.", 8, 1_700.0, "gamble_play"),
 )
 
+CONTRACT_QUEST_POOL: tuple[QuestDef, ...] = (
+    QuestDef("ct_boss", "Contract: Raid Boss", "Deal 10,000 boss damage this period.", 10_000, 4_000.0, "boss_damage"),
+    QuestDef("ct_biz", "Contract: Empire", "Collect business revenue 8 times.", 8, 3_500.0, "business_collect"),
+    QuestDef("ct_drugs", "Contract: Distribution", "Sell product 20 times.", 20, 4_500.0, "drug_sell"),
+    QuestDef("ct_duel", "Contract: Enforcer", "Win 5 duels.", 5, 4_000.0, "duel_win"),
+    QuestDef("ct_dungeon", "Contract: Delver", "Clear 5 dungeons.", 5, 5_000.0, "dungeon_clear"),
+)
+
 EMPIRE_QUESTS: tuple[QuestDef, ...] = (
     QuestDef("empire_create", "Open Shop", "Create a business with `/business create`.", 1, 1_000.0, "business_create"),
     QuestDef("empire_upgrade", "First Upgrade", "Collect revenue and buy a business upgrade.", 1, 2_000.0, "business_upgrade"),
@@ -74,6 +82,7 @@ DAILY_QUEST_COUNT = 3
 TRACK_ONBOARDING = "onboarding"
 TRACK_DAILY = "daily"
 TRACK_WEEKLY = "weekly"
+TRACK_CONTRACT = "contract"
 TRACK_EMPIRE = config.TRACK_EMPIRE
 
 
@@ -89,8 +98,17 @@ def weekly_reset_key(timestamp: float | None = None) -> str:
     return dt.strftime("%G-W%V")
 
 
+def contract_reset_key(timestamp: float | None = None) -> str:
+    ts = time.time() if timestamp is None else timestamp
+    period = config.CONTRACT_RESET_DAYS * 24 * 60 * 60
+    return str(int(ts // period))
+
+
 def quest_by_id(quest_id: str) -> QuestDef | None:
-    for quest in (*ONBOARDING_QUESTS, *DAILY_QUEST_POOL, *WEEKLY_QUEST_POOL, *EMPIRE_QUESTS):
+    for quest in (
+        *ONBOARDING_QUESTS, *DAILY_QUEST_POOL, *WEEKLY_QUEST_POOL,
+        *CONTRACT_QUEST_POOL, *EMPIRE_QUESTS,
+    ):
         if quest.quest_id == quest_id:
             return quest
     return None
@@ -138,6 +156,23 @@ async def ensure_onboarding_quests(db: Database, guild_id: int, user_id: int) ->
             target=quest.target,
             reset_key="",
         )
+
+
+async def ensure_contract_quest(db: Database, guild_id: int, user_id: int) -> None:
+    reset_key = contract_reset_key()
+    rows = await db.list_user_quests(guild_id, user_id, TRACK_CONTRACT)
+    if rows and all(str(row["reset_key"]) == reset_key for row in rows):
+        return
+    await db.clear_user_quest_track(guild_id, user_id, TRACK_CONTRACT)
+    pick = random.choice(list(CONTRACT_QUEST_POOL))
+    await db.upsert_user_quest(
+        guild_id,
+        user_id,
+        TRACK_CONTRACT,
+        pick.quest_id,
+        target=pick.target,
+        reset_key=reset_key,
+    )
 
 
 async def ensure_weekly_quests(db: Database, guild_id: int, user_id: int) -> None:
@@ -205,13 +240,17 @@ async def record_quest_event(
         if is_veteran(progress):
             await ensure_daily_quests(db, guild_id, user_id)
             await ensure_weekly_quests(db, guild_id, user_id)
+            await ensure_contract_quest(db, guild_id, user_id)
             tracks.append(TRACK_DAILY)
             tracks.append(TRACK_WEEKLY)
+            tracks.append(TRACK_CONTRACT)
         elif empire_done:
             await ensure_daily_quests(db, guild_id, user_id)
             await ensure_weekly_quests(db, guild_id, user_id)
+            await ensure_contract_quest(db, guild_id, user_id)
             tracks.append(TRACK_DAILY)
             tracks.append(TRACK_WEEKLY)
+            tracks.append(TRACK_CONTRACT)
 
     completed_ids: list[str] = []
     for track in tracks:

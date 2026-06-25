@@ -346,6 +346,7 @@ class TradeReceiveView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
         del button
+        trade = await self.cog.bot.db.get_pending_trade(self.trade_id, self.guild_id)
         err = await self.cog.bot.db.resolve_trade(
             self.trade_id, self.guild_id, interaction.user.id, "accept",
         )
@@ -357,7 +358,6 @@ class TradeReceiveView(discord.ui.View):
             }
             await interaction.response.send_message(msgs.get(err, "Could not accept."), ephemeral=True)
             return
-        trade = await self.cog.bot.db.get_pending_trade(self.trade_id, self.guild_id)
         if trade is not None:
             from utils.quests import record_quest_event
 

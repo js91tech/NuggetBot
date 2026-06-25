@@ -107,6 +107,31 @@ REFERRAL_REFERRER_REWARD = 1_000.0
 REFERRAL_REFEREE_REWARD = 500.0
 REFERRAL_CODE_LENGTH = 6
 
+# Tier 3 retention — crew challenges, milestones, contracts, gear market, weekly podium
+CREW_CHALLENGE_DRUG_WEIGHT = 100.0
+CREW_CHALLENGE_WINNER_TREASURY = 75_000.0
+CREW_CHALLENGE_MEMBER_BONUS = 500.0
+
+CONTRACT_QUEST_COUNT = 1
+CONTRACT_RESET_DAYS = 3
+
+GEAR_MARKET_MAX_LISTINGS = 5
+GEAR_MARKET_LISTING_FEE = 0.0
+
+WEEKLY_PODIUM_REWARDS: tuple[float, ...] = (5_000.0, 3_000.0, 1_500.0)
+WEEKLY_PODIUM_CATEGORIES: tuple[str, ...] = ("boss_damage",)
+
+MILESTONE_REWARDS: dict[str, float] = {
+    "activity_10": 1_500.0,
+    "activity_25": 3_500.0,
+    "activity_50": 8_000.0,
+    "streak_7": 1_000.0,
+    "streak_14": 2_500.0,
+    "referrals_3": 2_000.0,
+    "weekly_all": 3_000.0,
+    "first_trade": 750.0,
+}
+
 BOUNTY_MIN_AMOUNT = 50.0
 BOUNTY_TAX = 5.0
 BOUNTY_TRIGGER_MAX_LENGTH = 32

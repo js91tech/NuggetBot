@@ -1360,6 +1360,9 @@ class Boss(commands.Cog):
             return BossAttackResult(error="No boss is active right now.")
 
         await record_quest_event(self.bot.db, guild_id, member.id, "boss_attack")
+        await record_quest_event(
+            self.bot.db, guild_id, member.id, "boss_damage", amount=int(damage),
+        )
 
         if float(updated["hp"]) <= 0:
             await self._complete_boss_defeat(
