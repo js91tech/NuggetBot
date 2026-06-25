@@ -129,6 +129,12 @@ class Economy(commands.Cog):
             message.author.id,
             "chat_message",
         )
+        if isinstance(message.author, discord.Member):
+            from cogs.retention import grant_activity_xp
+
+            await grant_activity_xp(
+                self.bot, message.author, message.guild.id, config.ACTIVITY_XP_PER_MESSAGE,
+            )
         self.active_chatters.add((message.guild.id, message.author.id))
         bucket = self.coin_drop_typers.setdefault(message.guild.id, set())
         bucket.add(message.author.id)
@@ -185,6 +191,11 @@ class Economy(commands.Cog):
                     if skip_passive_bot(member) or await self.bot.db.is_restricted(member.id, guild.id):
                         continue
                     await self.bot.db.credit_wallet(member.id, guild.id, reward)
+                    from cogs.retention import grant_activity_xp
+
+                    await grant_activity_xp(
+                        self.bot, member, guild.id, config.ACTIVITY_XP_PER_VC_TICK,
+                    )
 
     @vc_earning_tick.before_loop
     async def before_vc_earning_tick(self) -> None:
@@ -214,9 +225,9 @@ class Economy(commands.Cog):
             config.DAILY_COOLDOWN_SECONDS,
             current,
         )
-        if remaining is not None:
-            hours = int(remaining // 3600)
-            minutes = int((remaining % 3600) // 60)
+        if remaining.remaining is not None:
+            hours = int(remaining.remaining // 3600)
+            minutes = int((remaining.remaining % 3600) // 60)
             await interaction.response.send_message(
                 f"You already claimed daily. Try again in {hours}h {minutes}m.",
                 ephemeral=True,
@@ -226,8 +237,12 @@ class Economy(commands.Cog):
         bonus_note = ""
         if aspect.daily_reward_mult > 1.0:
             bonus_note = f" (×{aspect.daily_reward_mult:.2f} **Windfall** aspect)"
+        streak_note = ""
+        if remaining.streak > 1:
+            pct = int((remaining.streak_bonus_mult - 1.0) * 100)
+            streak_note = f"\n🔥 **{remaining.streak}-day streak** (+{pct}% bonus)"
         await interaction.response.send_message(
-            f"You claimed {fmt_amount(reward)}.{bonus_note}",
+            f"You claimed {fmt_amount(remaining.reward)}.{bonus_note}{streak_note}",
             ephemeral=True,
         )
         await record_quest_event(

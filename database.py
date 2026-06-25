@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import socket
 import time
 from collections.abc import Iterable
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiosqlite
 import asyncpg
 
 import config
+
+
+class DailyClaimResult(NamedTuple):
+    remaining: float | None
+    reward: float
+    streak: int
+    streak_bonus_mult: float
 
 
 def _spendable_cents(value: object) -> int:
@@ -496,6 +504,106 @@ class Database:
         await self._migrate_active_drug_buff()
         await self._migrate_drug_grow_fertilizer()
         await self._migrate_empire_expansion()
+        await self._migrate_tier1_retention()
+
+    async def _migrate_tier1_retention(self) -> None:
+        """Daily streaks, activity XP, trades, weekly stats, notification prefs."""
+        import config
+
+        pk = "SERIAL PRIMARY KEY" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        user_cols = [
+            ("daily_streak", "INTEGER NOT NULL DEFAULT 0"),
+            ("activity_xp", "INTEGER NOT NULL DEFAULT 0 CHECK (activity_xp >= 0)"),
+            ("notify_flags", f"INTEGER NOT NULL DEFAULT {config.NOTIFY_DEFAULT_FLAGS}"),
+        ]
+        if self.is_postgres:
+            for col, typedef in user_cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'users' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in user_cols:
+                if col not in existing:
+                    await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
+
+        gear_escrow_col = "escrow_trade_id"
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'gear_instances' AND column_name = ?
+                """,
+                (gear_escrow_col,),
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(
+                    "ALTER TABLE gear_instances ADD COLUMN escrow_trade_id INTEGER",
+                )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(gear_instances)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if gear_escrow_col not in existing:
+                await self.conn.execute(
+                    "ALTER TABLE gear_instances ADD COLUMN escrow_trade_id INTEGER",
+                )
+
+        await self.conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS pending_trades (
+                trade_id {pk},
+                guild_id BIGINT NOT NULL,
+                initiator_id BIGINT NOT NULL,
+                receiver_id BIGINT NOT NULL,
+                offer_nuggets REAL NOT NULL DEFAULT 0 CHECK (offer_nuggets >= 0),
+                offer_drugs TEXT NOT NULL DEFAULT '{{}}',
+                offer_gear TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pending_trades_receiver
+            ON pending_trades(guild_id, receiver_id, status)
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_weekly_stats (
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                week_id TEXT NOT NULL,
+                boss_damage REAL NOT NULL DEFAULT 0 CHECK (boss_damage >= 0),
+                business_collected REAL NOT NULL DEFAULT 0 CHECK (business_collected >= 0),
+                drug_sales INTEGER NOT NULL DEFAULT 0 CHECK (drug_sales >= 0),
+                PRIMARY KEY (user_id, guild_id, week_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_notify_cooldown (
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                notify_key TEXT NOT NULL,
+                last_sent_at REAL NOT NULL,
+                PRIMARY KEY (user_id, guild_id, notify_key)
+            )
+            """,
+        )
+        await self.conn.commit()
 
     async def _migrate_character_attributes(self) -> None:
         import config
@@ -4280,37 +4388,53 @@ class Database:
         reward: float,
         cooldown_seconds: float,
         timestamp: float,
-    ) -> float | None:
-        bonus_reward = await self._apply_income_bonuses(user_id, guild_id, reward)
+    ) -> DailyClaimResult:
+        income_mult = await self.get_income_multiplier(user_id, guild_id)
         async with self._write_lock:
             await self.conn.execute("BEGIN IMMEDIATE")
             try:
                 await self._ensure_user_no_lock(user_id, guild_id)
                 cursor = await self.conn.execute(
-                    "SELECT last_daily FROM users WHERE user_id = ? AND guild_id = ?",
+                    """
+                    SELECT last_daily, daily_streak FROM users
+                    WHERE user_id = ? AND guild_id = ?
+                    """,
                     (user_id, guild_id),
                 )
                 row = await cursor.fetchone()
                 last_daily = float(row["last_daily"]) if row is not None else 0.0
+                current_streak = int(row["daily_streak"]) if row is not None else 0
                 remaining = (last_daily + cooldown_seconds) - timestamp if last_daily > 0 else -1
                 if remaining > 0:
                     await self.conn.rollback()
-                    return remaining
+                    return DailyClaimResult(remaining, 0.0, current_streak, 1.0)
+
+                streak_window = cooldown_seconds + config.DAILY_STREAK_GRACE_SECONDS
+                if last_daily > 0 and (timestamp - last_daily) <= streak_window:
+                    new_streak = min(current_streak + 1, config.DAILY_STREAK_MAX_DAYS)
+                else:
+                    new_streak = 1
+                streak_bonus_mult = 1.0 + (new_streak - 1) * config.DAILY_STREAK_BONUS_PER_DAY
+                max_mult = 1.0 + (config.DAILY_STREAK_MAX_DAYS - 1) * config.DAILY_STREAK_BONUS_PER_DAY
+                streak_bonus_mult = min(streak_bonus_mult, max_mult)
+                reward_with_streak = reward * streak_bonus_mult
+                bonus_reward = reward_with_streak * income_mult
                 await self.conn.execute(
                     """
                     UPDATE users
                     SET wallet = wallet + ?,
                         total_earned = total_earned + ?,
-                        last_daily = ?
+                        last_daily = ?,
+                        daily_streak = ?
                     WHERE user_id = ? AND guild_id = ?
                     """,
-                    (bonus_reward, bonus_reward, timestamp, user_id, guild_id),
+                    (bonus_reward, bonus_reward, timestamp, new_streak, user_id, guild_id),
                 )
             except Exception:
                 await self.conn.rollback()
                 raise
             await self.conn.commit()
-            return None
+            return DailyClaimResult(None, bonus_reward, new_streak, streak_bonus_mult)
 
     async def set_last_daily(self, user_id: int, guild_id: int, timestamp: float) -> None:
         async with self._write_lock:
@@ -5005,6 +5129,9 @@ class Database:
                         damage = boss_damage.damage + excluded.damage
                     """,
                     (guild_id, user_id, applied),
+                )
+                await self._increment_weekly_stat_no_lock(
+                    user_id, guild_id, boss_damage=applied,
                 )
                 cursor = await self.conn.execute(
                     "SELECT * FROM boss_sessions WHERE guild_id = ?",
@@ -8408,6 +8535,9 @@ class Database:
                 """,
                 (amount, amount, user_id, guild_id),
             )
+            await self._increment_weekly_stat_no_lock(
+                user_id, guild_id, business_collected=amount,
+            )
             await self.conn.commit()
         return amount, None
 
@@ -8732,6 +8862,9 @@ class Database:
     async def _increment_drug_units_sold_no_lock(
         self, user_id: int, guild_id: int, quantity: int,
     ) -> None:
+        qty = max(0, int(quantity))
+        if qty <= 0:
+            return
         await self._ensure_user_no_lock(user_id, guild_id)
         await self.conn.execute(
             """
@@ -8740,8 +8873,9 @@ class Database:
             ON CONFLICT(user_id, guild_id) DO UPDATE SET
                 units_sold = user_drug_stats.units_sold + excluded.units_sold
             """,
-            (user_id, guild_id, max(0, int(quantity))),
+            (user_id, guild_id, qty),
         )
+        await self._increment_weekly_stat_no_lock(user_id, guild_id, drug_sales=qty)
 
     async def grant_legacy_perk(
         self, user_id: int, guild_id: int, perk_id: str,
@@ -11854,3 +11988,552 @@ class Database:
         if isinstance(victory, memoryview):
             victory = bytes(victory)
         return bytes(portrait), bytes(victory), str(row["file_ext"])
+
+    # --- Tier 1 retention: activity XP, trades, weekly stats, notifications ---
+
+    async def get_activity_xp(self, user_id: int, guild_id: int) -> int:
+        await self.ensure_user(user_id, guild_id)
+        cursor = await self.conn.execute(
+            "SELECT activity_xp FROM users WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        return int(row["activity_xp"]) if row else 0
+
+    async def add_activity_xp(
+        self, user_id: int, guild_id: int, amount: int,
+    ) -> tuple[int, int, int]:
+        """Add activity XP. Returns (total_xp, old_level, new_level)."""
+        from utils.activity_levels import level_from_total_xp
+
+        gain = max(0, int(amount))
+        if gain <= 0:
+            xp = await self.get_activity_xp(user_id, guild_id)
+            old_level, _, _ = level_from_total_xp(xp)
+            return xp, old_level, old_level
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT activity_xp FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            old_xp = int(row["activity_xp"]) if row else 0
+            old_level, _, _ = level_from_total_xp(old_xp)
+            new_xp = old_xp + gain
+            await self.conn.execute(
+                "UPDATE users SET activity_xp = ? WHERE user_id = ? AND guild_id = ?",
+                (new_xp, user_id, guild_id),
+            )
+            await self.conn.commit()
+        new_level, _, _ = level_from_total_xp(new_xp)
+        return new_xp, old_level, new_level
+
+    async def get_daily_streak(self, user_id: int, guild_id: int) -> int:
+        await self.ensure_user(user_id, guild_id)
+        cursor = await self.conn.execute(
+            "SELECT daily_streak FROM users WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        return int(row["daily_streak"]) if row else 0
+
+    async def get_notify_flags(self, user_id: int, guild_id: int) -> int:
+        await self.ensure_user(user_id, guild_id)
+        cursor = await self.conn.execute(
+            "SELECT notify_flags FROM users WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        return int(row["notify_flags"]) if row else config.NOTIFY_DEFAULT_FLAGS
+
+    async def set_notify_flags(self, user_id: int, guild_id: int, flags: int) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                "UPDATE users SET notify_flags = ? WHERE user_id = ? AND guild_id = ?",
+                (int(flags), user_id, guild_id),
+            )
+            await self.conn.commit()
+
+    async def toggle_notify_flag(self, user_id: int, guild_id: int, flag: int) -> int:
+        current = await self.get_notify_flags(user_id, guild_id)
+        new_flags = current ^ flag if current & flag else current | flag
+        await self.set_notify_flags(user_id, guild_id, new_flags)
+        return new_flags
+
+    async def notify_cooldown_remaining(
+        self, user_id: int, guild_id: int, notify_key: str, *, cooldown_seconds: float,
+    ) -> float:
+        cursor = await self.conn.execute(
+            """
+            SELECT last_sent_at FROM user_notify_cooldown
+            WHERE user_id = ? AND guild_id = ? AND notify_key = ?
+            """,
+            (user_id, guild_id, notify_key),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return 0.0
+        elapsed = time.time() - float(row["last_sent_at"])
+        return max(0.0, cooldown_seconds - elapsed)
+
+    async def record_notify_sent(self, user_id: int, guild_id: int, notify_key: str) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                INSERT INTO user_notify_cooldown (user_id, guild_id, notify_key, last_sent_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id, notify_key) DO UPDATE SET
+                    last_sent_at = excluded.last_sent_at
+                """,
+                (user_id, guild_id, notify_key, time.time()),
+            )
+            await self.conn.commit()
+
+    @staticmethod
+    def current_week_id(ts: float | None = None) -> str:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromtimestamp(ts or time.time(), tz=timezone.utc)
+        return dt.strftime("%G-W%V")
+
+    async def increment_weekly_stat(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        boss_damage: float = 0.0,
+        business_collected: float = 0.0,
+        drug_sales: int = 0,
+    ) -> None:
+        if boss_damage <= 0 and business_collected <= 0 and drug_sales <= 0:
+            return
+        async with self._write_lock:
+            await self._increment_weekly_stat_no_lock(
+                user_id, guild_id,
+                boss_damage=boss_damage,
+                business_collected=business_collected,
+                drug_sales=drug_sales,
+            )
+            await self.conn.commit()
+
+    async def _increment_weekly_stat_no_lock(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        boss_damage: float = 0.0,
+        business_collected: float = 0.0,
+        drug_sales: int = 0,
+    ) -> None:
+        if boss_damage <= 0 and business_collected <= 0 and drug_sales <= 0:
+            return
+        week_id = self.current_week_id()
+        await self._ensure_user_no_lock(user_id, guild_id)
+        await self.conn.execute(
+            """
+            INSERT INTO user_weekly_stats (
+                user_id, guild_id, week_id, boss_damage, business_collected, drug_sales
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, guild_id, week_id) DO UPDATE SET
+                boss_damage = user_weekly_stats.boss_damage + excluded.boss_damage,
+                business_collected = user_weekly_stats.business_collected + excluded.business_collected,
+                drug_sales = user_weekly_stats.drug_sales + excluded.drug_sales
+            """,
+            (
+                user_id, guild_id, week_id,
+                max(0.0, float(boss_damage)),
+                max(0.0, float(business_collected)),
+                max(0, int(drug_sales)),
+            ),
+        )
+
+    async def weekly_leaderboard(
+        self, guild_id: int, column: str, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        allowed = {"boss_damage", "business_collected", "drug_sales"}
+        if column not in allowed:
+            raise ValueError(f"Invalid weekly column: {column}")
+        week_id = self.current_week_id()
+        cursor = await self.conn.execute(
+            f"""
+            SELECT user_id, {column} AS score
+            FROM user_weekly_stats
+            WHERE guild_id = ? AND week_id = ? AND {column} > 0
+            ORDER BY {column} DESC
+            LIMIT ?
+            """,
+            (guild_id, week_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def _equipped_gear_instance_ids(self, user_id: int, guild_id: int) -> set[int]:
+        records = await self.get_equipment_records(user_id, guild_id)
+        return {
+            int(rec["gear_instance_id"])
+            for rec in records.values()
+            if rec.get("gear_instance_id") is not None
+        }
+
+    async def list_tradeable_gear_instances(
+        self, user_id: int, guild_id: int,
+    ) -> list[aiosqlite.Row]:
+        equipped = await self._equipped_gear_instance_ids(user_id, guild_id)
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM gear_instances
+            WHERE guild_id = ? AND user_id = ?
+              AND (escrow_trade_id IS NULL OR escrow_trade_id = 0)
+            ORDER BY instance_id DESC
+            """,
+            (guild_id, user_id),
+        )
+        rows = await cursor.fetchall()
+        return [r for r in rows if int(r["instance_id"]) not in equipped]
+
+    async def get_pending_trade(self, trade_id: int, guild_id: int) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM pending_trades WHERE trade_id = ? AND guild_id = ?",
+            (trade_id, guild_id),
+        )
+        return await cursor.fetchone()
+
+    async def get_active_trade_for_user(
+        self, user_id: int, guild_id: int,
+    ) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM pending_trades
+            WHERE guild_id = ? AND status = 'pending' AND expires_at > ?
+              AND (initiator_id = ? OR receiver_id = ?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (guild_id, time.time(), user_id, user_id),
+        )
+        return await cursor.fetchone()
+
+    async def create_pending_trade(
+        self,
+        initiator_id: int,
+        receiver_id: int,
+        guild_id: int,
+        *,
+        nuggets: float,
+        drugs: dict[str, int],
+        gear_instance_ids: list[int],
+    ) -> tuple[int | None, str | None]:
+        if initiator_id == receiver_id:
+            return None, "self_trade"
+        nuggets = max(0.0, float(nuggets))
+        drugs = {k: max(0, int(v)) for k, v in drugs.items() if int(v) > 0}
+        gear_instance_ids = [int(i) for i in gear_instance_ids]
+        if len(drugs) > config.TRADE_MAX_DRUG_TYPES:
+            return None, "too_many_drugs"
+        if len(gear_instance_ids) > config.TRADE_MAX_GEAR_INSTANCES:
+            return None, "too_many_gear"
+        if nuggets <= 0 and not drugs and not gear_instance_ids:
+            return None, "empty_offer"
+
+        now = time.time()
+        expires_at = now + config.TRADE_EXPIRE_SECONDS
+        async with self._write_lock:
+            existing = await self.conn.execute(
+                """
+                SELECT trade_id FROM pending_trades
+                WHERE guild_id = ? AND status = 'pending' AND expires_at > ?
+                  AND (initiator_id = ? OR receiver_id = ? OR initiator_id = ? OR receiver_id = ?)
+                LIMIT 1
+                """,
+                (guild_id, now, initiator_id, initiator_id, receiver_id, receiver_id),
+            )
+            if await existing.fetchone() is not None:
+                await self.conn.commit()
+                return None, "trade_busy"
+
+            await self._ensure_user_no_lock(initiator_id, guild_id)
+            await self._ensure_user_no_lock(receiver_id, guild_id)
+
+            wallet_cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (initiator_id, guild_id),
+            )
+            wallet_row = await wallet_cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < nuggets:
+                await self.conn.commit()
+                return None, "insufficient_nuggets"
+
+            for drug_id, qty in drugs.items():
+                stored_id, available = await self._find_drug_inventory_qty(
+                    initiator_id, guild_id, drug_id,
+                )
+                if stored_id is None or available < qty:
+                    await self.conn.commit()
+                    return None, "insufficient_drugs"
+
+            equipped = await self._equipped_gear_instance_ids(initiator_id, guild_id)
+            for instance_id in gear_instance_ids:
+                inst_cursor = await self.conn.execute(
+                    """
+                    SELECT * FROM gear_instances
+                    WHERE instance_id = ? AND guild_id = ? AND user_id = ?
+                      AND (escrow_trade_id IS NULL OR escrow_trade_id = 0)
+                    """,
+                    (instance_id, guild_id, initiator_id),
+                )
+                inst = await inst_cursor.fetchone()
+                if inst is None or int(instance_id) in equipped:
+                    await self.conn.commit()
+                    return None, "invalid_gear"
+
+            if nuggets > 0:
+                await self.conn.execute(
+                    "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                    (nuggets, initiator_id, guild_id),
+                )
+            for drug_id, qty in drugs.items():
+                stored_id, _ = await self._find_drug_inventory_qty(initiator_id, guild_id, drug_id)
+                assert stored_id is not None
+                await self.conn.execute(
+                    """
+                    UPDATE drug_inventory SET quantity = quantity - ?
+                    WHERE user_id = ? AND guild_id = ? AND drug_id = ?
+                    """,
+                    (qty, initiator_id, guild_id, stored_id),
+                )
+
+            await self.conn.execute(
+                """
+                INSERT INTO pending_trades (
+                    guild_id, initiator_id, receiver_id, offer_nuggets, offer_drugs,
+                    offer_gear, status, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (
+                    guild_id, initiator_id, receiver_id, nuggets,
+                    json.dumps(drugs), json.dumps(gear_instance_ids),
+                    now, expires_at,
+                ),
+            )
+            trade_id = await self._last_insert_id_no_lock("pending_trades", "trade_id")
+            for instance_id in gear_instance_ids:
+                await self.conn.execute(
+                    """
+                    UPDATE gear_instances SET escrow_trade_id = ?
+                    WHERE instance_id = ? AND guild_id = ?
+                    """,
+                    (trade_id, instance_id, guild_id),
+                )
+            await self.conn.commit()
+        return int(trade_id), None
+
+    async def _refund_trade_offer(self, trade: aiosqlite.Row) -> None:
+        initiator_id = int(trade["initiator_id"])
+        guild_id = int(trade["guild_id"])
+        trade_id = int(trade["trade_id"])
+        nuggets = float(trade["offer_nuggets"])
+        drugs = json.loads(str(trade["offer_drugs"] or "{}"))
+        gear_ids = json.loads(str(trade["offer_gear"] or "[]"))
+
+        if nuggets > 0:
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet + ? WHERE user_id = ? AND guild_id = ?",
+                (nuggets, initiator_id, guild_id),
+            )
+        for drug_id, qty in drugs.items():
+            qty = int(qty)
+            if qty <= 0:
+                continue
+            await self.conn.execute(
+                """
+                INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id, drug_id) DO UPDATE SET
+                    quantity = drug_inventory.quantity + excluded.quantity
+                """,
+                (initiator_id, guild_id, drug_id, qty),
+            )
+        for instance_id in gear_ids:
+            await self.conn.execute(
+                """
+                UPDATE gear_instances SET escrow_trade_id = NULL
+                WHERE instance_id = ? AND guild_id = ? AND escrow_trade_id = ?
+                """,
+                (int(instance_id), guild_id, trade_id),
+            )
+
+    async def _complete_trade_offer(self, trade: aiosqlite.Row) -> None:
+        receiver_id = int(trade["receiver_id"])
+        guild_id = int(trade["guild_id"])
+        trade_id = int(trade["trade_id"])
+        nuggets = float(trade["offer_nuggets"])
+        drugs = json.loads(str(trade["offer_drugs"] or "{}"))
+        gear_ids = json.loads(str(trade["offer_gear"] or "[]"))
+
+        if nuggets > 0:
+            await self.conn.execute(
+                """
+                UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (nuggets, nuggets, receiver_id, guild_id),
+            )
+        for drug_id, qty in drugs.items():
+            qty = int(qty)
+            if qty <= 0:
+                continue
+            await self.conn.execute(
+                """
+                INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id, drug_id) DO UPDATE SET
+                    quantity = drug_inventory.quantity + excluded.quantity
+                """,
+                (receiver_id, guild_id, drug_id, qty),
+            )
+        for instance_id in gear_ids:
+            await self.conn.execute(
+                """
+                UPDATE gear_instances
+                SET user_id = ?, escrow_trade_id = NULL
+                WHERE instance_id = ? AND guild_id = ? AND escrow_trade_id = ?
+                """,
+                (receiver_id, int(instance_id), guild_id, trade_id),
+            )
+
+    async def resolve_trade(
+        self, trade_id: int, guild_id: int, actor_id: int, action: str,
+    ) -> str | None:
+        """Accept, decline, or cancel a trade. Returns error code or None."""
+        now = time.time()
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                "SELECT * FROM pending_trades WHERE trade_id = ? AND guild_id = ?",
+                (trade_id, guild_id),
+            )
+            trade = await cursor.fetchone()
+            if trade is None or str(trade["status"]) != "pending":
+                await self.conn.commit()
+                return "not_found"
+            if float(trade["expires_at"]) <= now:
+                await self._refund_trade_offer(trade)
+                await self.conn.execute(
+                    "UPDATE pending_trades SET status = 'expired' WHERE trade_id = ?",
+                    (trade_id,),
+                )
+                await self.conn.commit()
+                return "expired"
+
+            initiator_id = int(trade["initiator_id"])
+            receiver_id = int(trade["receiver_id"])
+            if action == "accept":
+                if actor_id != receiver_id:
+                    await self.conn.commit()
+                    return "not_receiver"
+                await self._complete_trade_offer(trade)
+                await self.conn.execute(
+                    "UPDATE pending_trades SET status = 'completed' WHERE trade_id = ?",
+                    (trade_id,),
+                )
+            elif action == "decline":
+                if actor_id != receiver_id:
+                    await self.conn.commit()
+                    return "not_receiver"
+                await self._refund_trade_offer(trade)
+                await self.conn.execute(
+                    "UPDATE pending_trades SET status = 'declined' WHERE trade_id = ?",
+                    (trade_id,),
+                )
+            elif action == "cancel":
+                if actor_id != initiator_id:
+                    await self.conn.commit()
+                    return "not_initiator"
+                await self._refund_trade_offer(trade)
+                await self.conn.execute(
+                    "UPDATE pending_trades SET status = 'cancelled' WHERE trade_id = ?",
+                    (trade_id,),
+                )
+            else:
+                await self.conn.commit()
+                return "invalid_action"
+            await self.conn.commit()
+        return None
+
+    async def expire_stale_trades(self) -> int:
+        now = time.time()
+        expired = 0
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT * FROM pending_trades
+                WHERE status = 'pending' AND expires_at <= ?
+                """,
+                (now,),
+            )
+            rows = await cursor.fetchall()
+            for trade in rows:
+                await self._refund_trade_offer(trade)
+                await self.conn.execute(
+                    "UPDATE pending_trades SET status = 'expired' WHERE trade_id = ?",
+                    (int(trade["trade_id"]),),
+                )
+                expired += 1
+            await self.conn.commit()
+        return expired
+
+    async def list_crop_ready_grows(self, guild_id: int) -> list[aiosqlite.Row]:
+        now = time.time()
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, grow_id, drug_id, ready_at FROM drug_grows
+            WHERE guild_id = ? AND ready_at <= ?
+            """,
+            (guild_id, now),
+        )
+        return list(await cursor.fetchall())
+
+    async def list_business_vault_alerts(self, guild_id: int) -> list[aiosqlite.Row]:
+        from utils.businesses import capacity_for_level
+
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, tier, stored_income, capacity
+            FROM user_businesses
+            WHERE guild_id = ?
+            """,
+            (guild_id,),
+        )
+        rows = await cursor.fetchall()
+        alerts: list[aiosqlite.Row] = []
+        for row in rows:
+            cap = capacity_for_level(int(row["tier"]), int(row["capacity"]))
+            if cap <= 0:
+                continue
+            fill = float(row["stored_income"]) / cap
+            if fill >= config.NOTIFY_BUSINESS_FILL_PCT:
+                alerts.append(row)
+        return alerts
+
+    async def list_notify_users(self, guild_id: int, flag: int) -> list[int]:
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id FROM users
+            WHERE guild_id = ? AND (notify_flags & ?) != 0
+            """,
+            (guild_id, flag),
+        )
+        return [int(r["user_id"]) for r in await cursor.fetchall()]
+
+    async def list_active_defense_attacks(self, guild_id: int) -> list[aiosqlite.Row]:
+        now = time.time()
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM business_attacks
+            WHERE guild_id = ? AND defended = 0
+              AND notify_expires_at > ? AND ends_at > ?
+            """,
+            (guild_id, now, now),
+        )
+        return list(await cursor.fetchall())

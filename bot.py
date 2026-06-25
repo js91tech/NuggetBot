@@ -46,6 +46,8 @@ COGS = (
     "cogs.season",
     "cogs.alchemy",
     "cogs.enhancement",
+    "cogs.trade",
+    "cogs.retention",
     "cogs.admin",
 )
 

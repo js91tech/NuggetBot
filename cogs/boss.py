@@ -1345,6 +1345,13 @@ class Boss(commands.Cog):
         updated = await self.bot.db.damage_boss(guild_id, member.id, damage)
         xp_gain = max(1, int(damage * config.CLASS_XP_PER_BOSS_DAMAGE))
         await self.bot.db.add_class_xp(member.id, guild_id, xp_gain)
+        from cogs.retention import grant_activity_xp
+
+        activity_xp = min(
+            damage * config.ACTIVITY_XP_PER_BOSS_DAMAGE,
+            config.ACTIVITY_XP_BOSS_DAMAGE_CAP,
+        )
+        await grant_activity_xp(self.bot, member, guild_id, int(activity_xp))
         if updated is not None:
             _, heal_applied = await self.bot.db.increment_boss_attack_count(guild_id)
         if heal_applied > 0:
