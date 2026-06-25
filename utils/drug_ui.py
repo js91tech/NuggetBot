@@ -47,6 +47,31 @@ def stash_select_options(inventory: dict[str, int]) -> list[discord.SelectOption
     return options
 
 
+def stash_action_options(inventory: dict[str, int]) -> list[discord.SelectOption]:
+    options: list[discord.SelectOption] = []
+    for drug_id, qty in inventory.items():
+        defn = drug_by_id(drug_id)
+        name = defn.name if defn else drug_id
+        emoji = defn.emoji if defn else None
+        options.append(
+            discord.SelectOption(
+                label=f"Sell {name} (×{qty})"[:100],
+                value=f"sell:{drug_id}",
+                description="Street sale",
+                emoji=emoji,
+            ),
+        )
+        options.append(
+            discord.SelectOption(
+                label=f"Use {name} (×{qty})"[:100],
+                value=f"use:{drug_id}",
+                description=(defn.effect_summary[:100] if defn else None),
+                emoji=emoji,
+            ),
+        )
+    return options[:25]
+
+
 async def consume_stash_product(
     cog: commands.Cog, guild_id: int, user_id: int, drug_id: str,
 ) -> dict[str, object]:
@@ -270,12 +295,19 @@ class FertilizeSelect(discord.ui.Select):
             placeholder="Apply fertilizer to a crop…",
             min_values=1,
             max_values=1,
-            options=options[:25],
+            options=options[:25] or [
+                discord.SelectOption(label="No crops need fertilizer", value="_none"),
+            ],
             disabled=not options,
             row=2,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "_none":
+            await interaction.response.send_message(
+                "No crops need fertilizer right now.", ephemeral=True,
+            )
+            return
         grow_id_str, fert_id = self.values[0].split(":", 1)
         err = await self.cog.bot.db.apply_fertilizer_to_grow(
             self.user_id, self.guild_id, int(grow_id_str), fert_id,
@@ -297,10 +329,17 @@ class FertilizeSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
 
 
-class UseSelect(discord.ui.Select):
-    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int, options: list[discord.SelectOption]) -> None:
+class StashActionSelect(discord.ui.Select):
+    def __init__(
+        self,
+        cog: commands.Cog,
+        guild_id: int,
+        user_id: int,
+        inventory: dict[str, int],
+    ) -> None:
+        options = stash_action_options(inventory)
         super().__init__(
-            placeholder="Use product (consume for effects)…",
+            placeholder="Stash: sell or use product…",
             options=options or [discord.SelectOption(label="Empty stash", value="_none")],
             disabled=not options,
             row=3,
@@ -311,9 +350,18 @@ class UseSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if self.values[0] == "_none":
-            await interaction.response.send_message("Nothing to use.", ephemeral=True)
+            await interaction.response.send_message("Nothing in your stash.", ephemeral=True)
             return
-        result = await consume_stash_product(self.cog, self.guild_id, self.user_id, self.values[0])
+        action, drug_id = self.values[0].split(":", 1)
+        if action == "sell":
+            await interaction.response.send_modal(
+                StreetSellModal(self.cog, self.guild_id, self.user_id, drug_id),
+            )
+            return
+        if action != "use":
+            await interaction.response.send_message("Unknown stash action.", ephemeral=True)
+            return
+        result = await consume_stash_product(self.cog, self.guild_id, self.user_id, drug_id)
         if result.get("error"):
             messages = {
                 "invalid_drug": "Unknown product.",
@@ -328,24 +376,6 @@ class UseSelect(discord.ui.Select):
         embed, file = await build_lab_embed(self.cog, self.guild_id, self.user_id)
         embed.description = format_consume_message(result)
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
-
-
-class SellSelect(discord.ui.Select):
-    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int, options: list[discord.SelectOption]) -> None:
-        super().__init__(
-            placeholder="Sell product on the street…",
-            options=options or [discord.SelectOption(label="Empty stash", value="_none")],
-            disabled=not options,
-            row=1,
-        )
-        self.cog = cog
-        self.guild_id = guild_id
-        self.user_id = user_id
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(
-            StreetSellModal(self.cog, self.guild_id, self.user_id, self.values[0]),
-        )
 
 
 class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
@@ -424,9 +454,6 @@ class DrugLabView(discord.ui.View):
         view = cls(cog, guild_id, user_id, plant_category=category)
         view.add_item(PlantCategorySelect(view, selected=category))
         view.add_item(PlantSelect(cog, guild_id, user_id, category=category))
-        inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
-        options = stash_select_options(inventory)
-        view.add_item(SellSelect(cog, guild_id, user_id, options))
         grows = await cog.bot.db.list_drug_grows(user_id, guild_id)
         fert_counts: dict[str, int] = {}
         for fert in FERTILIZERS:
@@ -434,7 +461,8 @@ class DrugLabView(discord.ui.View):
                 user_id, guild_id, fert.item_id,
             )
         view.add_item(FertilizeSelect(cog, guild_id, user_id, grows, fert_counts))
-        view.add_item(UseSelect(cog, guild_id, user_id, options))
+        inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
+        view.add_item(StashActionSelect(cog, guild_id, user_id, inventory))
         return view
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -469,14 +497,14 @@ class DrugLabView(discord.ui.View):
             embed.description = "Nothing ready to harvest yet."
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
 
-    @discord.ui.button(label="🏪 Market", style=discord.ButtonStyle.primary, row=3)
+    @discord.ui.button(label="🏪 Market", style=discord.ButtonStyle.primary, row=4)
     async def market_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
         embed = await build_drug_market_embed(self.cog, interaction.guild, self.user_id)
         view = await DrugMarketView.build(self.cog, self.guild_id, self.user_id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=4)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
         view = await DrugLabView.build(self.cog, self.guild_id, self.user_id)
