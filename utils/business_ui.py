@@ -137,6 +137,20 @@ def build_business_embed(
         ),
         inline=False,
     )
+    if tier >= config.DRUG_SUPPLY_CHAIN_TIER_MIN:
+        from utils.drugs import drug_by_id
+
+        chain_id = row["supply_chain_drug_id"]
+        if chain_id:
+            defn = drug_by_id(str(chain_id))
+            chain_label = f"{defn.emoji} **{defn.name}**" if defn else str(chain_id)
+        else:
+            chain_label = "_Off_"
+        embed.add_field(
+            name="Supply chain",
+            value=f"{chain_label} · auto-funds lab from stored revenue",
+            inline=False,
+        )
     embed.add_field(
         name="Upgrade branches",
         value=(
@@ -309,6 +323,13 @@ class BusinessPanelView(discord.ui.View):
         await interaction.response.send_message(
             embed=build_action_embed(), view=view, ephemeral=True,
         )
+
+    @discord.ui.button(label="Supply chain", style=discord.ButtonStyle.secondary, row=1)
+    async def supply_chain_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        from utils.supply_chain_ui import send_supply_chain_panel
+
+        await send_supply_chain_panel(interaction, self.cog)
 
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

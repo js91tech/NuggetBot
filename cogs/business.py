@@ -247,44 +247,15 @@ class Business(commands.Cog):
 
     @business_group.command(
         name="supplychain",
-        description="Set auto-funded drug supply chain (Tier 5+). Pass no drug to disable.",
+        description="Configure auto-funded drug supply chain (Tier 5+).",
     )
-    @app_commands.describe(drug_id="Drug strain id from /drugs catalog, or leave empty to disable")
-    async def supplychain(
-        self,
-        interaction: discord.Interaction,
-        drug_id: str | None = None,
-    ) -> None:
-        guild_id = interaction.guild_id
-        if guild_id is None:
+    async def supplychain(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        err = await self.bot.db.set_supply_chain_drug(
-            interaction.user.id, guild_id, drug_id,
-        )
-        if err == "no_business":
-            await interaction.response.send_message("You don't own a business.", ephemeral=True)
-            return
-        if err == "tier_too_low":
-            await interaction.response.send_message(
-                f"Supply chain unlocks at business tier **{config.DRUG_SUPPLY_CHAIN_TIER_MIN}**.",
-                ephemeral=True,
-            )
-            return
-        if err == "invalid_drug":
-            await interaction.response.send_message("Unknown drug strain.", ephemeral=True)
-            return
-        if drug_id:
-            from utils.drugs import drug_by_id
+        from utils.supply_chain_ui import send_supply_chain_panel
 
-            defn = drug_by_id(drug_id)
-            name = defn.name if defn else drug_id
-            await interaction.response.send_message(
-                f"🔗 Supply chain set to **{name}**. Stored revenue will auto-buy seeds when slots are free.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message("Supply chain disabled.", ephemeral=True)
+        await send_supply_chain_panel(interaction, self)
 
     @business_group.command(
         name="acquisitions",
