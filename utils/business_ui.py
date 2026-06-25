@@ -137,6 +137,24 @@ def build_business_embed(
         ),
         inline=False,
     )
+    if tier >= config.DRUG_SUPPLY_CHAIN_TIER_MIN:
+        from utils.drugs import drug_by_id
+
+        chain_id = row["supply_chain_drug_id"] if row["supply_chain_drug_id"] else None
+        if chain_id:
+            defn = drug_by_id(str(chain_id))
+            chain_label = f"{defn.emoji} {defn.name}" if defn else str(chain_id)
+            embed.add_field(
+                name="Supply chain",
+                value=f"🔗 Auto-funding **{chain_label}** from stored revenue",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Supply chain",
+                value="_Off_ — use **Supply chain** on the panel (tier 5+)",
+                inline=False,
+            )
     embed.add_field(
         name="Upgrade branches",
         value=(
@@ -298,7 +316,19 @@ class BusinessPanelView(discord.ui.View):
 
         embed, files = await build_district_payload(self.cog, interaction.guild, self.user_id)
         view = DistrictMapView(self.cog, self.guild_id, self.user_id)
-        await interaction.response.send_message(embed=embed, view=view, files=files, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="Manage", style=discord.ButtonStyle.primary, row=1)
+    async def manage_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        from utils.business_manage_ui import send_manage_panel
+
+        await send_manage_panel(interaction, self.cog)
+
+    @discord.ui.button(label="Supply chain", style=discord.ButtonStyle.secondary, row=1)
+    async def supply_chain_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await send_supply_chain_panel(interaction, self.cog, self.guild_id, self.user_id)
 
     @discord.ui.button(label="Compete", style=discord.ButtonStyle.danger, row=1)
     async def compete_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -315,6 +345,122 @@ class BusinessPanelView(discord.ui.View):
         del button
         await interaction.response.defer()
         await _refresh_panel(interaction, self.cog, self.guild_id, self.user_id)
+
+
+def build_supply_chain_embed(row: object) -> discord.Embed:
+    from utils.drugs import drug_by_id
+
+    tier = int(row["tier"])
+    current = row["supply_chain_drug_id"]
+    embed = discord.Embed(
+        title="🔗 Drug Supply Chain",
+        description=(
+            "At tier **5+**, your business auto-buys seeds from **stored revenue** "
+            "when a lab slot is free (grows take 50% longer than manual plants)."
+        ),
+        color=discord.Color.blue(),
+    )
+    if tier < config.DRUG_SUPPLY_CHAIN_TIER_MIN:
+        embed.description = (
+            f"Unlocks at business tier **{config.DRUG_SUPPLY_CHAIN_TIER_MIN}** "
+            "(Chain Restaurant or higher)."
+        )
+    elif current:
+        defn = drug_by_id(str(current))
+        label = f"{defn.emoji} {defn.name}" if defn else str(current)
+        embed.add_field(name="Active", value=f"Auto-planting **{label}**", inline=False)
+    else:
+        embed.add_field(name="Active", value="_Disabled_", inline=False)
+    return embed
+
+
+class SupplyChainDrugSelect(discord.ui.Select):
+    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int, *, enabled: bool) -> None:
+        from utils.drugs import DRUGS
+
+        options = [
+            discord.SelectOption(
+                label=defn.name,
+                value=defn.drug_id,
+                description=f"Seed {fmt_amount(defn.seed_cost)}"[:100],
+                emoji=defn.emoji,
+            )
+            for defn in DRUGS[:25]
+        ]
+        super().__init__(
+            placeholder="Select strain to auto-fund…",
+            options=options,
+            disabled=not enabled,
+            row=0,
+        )
+        self.cog = cog
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        err = await self.cog.bot.db.set_supply_chain_drug(
+            self.user_id, self.guild_id, self.values[0],
+        )
+        if err:
+            await interaction.response.send_message("Could not set supply chain.", ephemeral=True)
+            return
+        from utils.drugs import drug_by_id
+
+        defn = drug_by_id(self.values[0])
+        row = await self.cog.bot.db.get_business(self.user_id, self.guild_id)
+        embed = build_supply_chain_embed(row)
+        view = SupplyChainView(self.cog, self.guild_id, self.user_id, row=row)
+        embed.description = f"✅ Supply chain set to **{defn.name if defn else self.values[0]}**."
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class SupplyChainView(discord.ui.View):
+    def __init__(
+        self,
+        cog: commands.Cog,
+        guild_id: int,
+        user_id: int,
+        *,
+        row: object,
+    ) -> None:
+        super().__init__(timeout=120.0)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.user_id = user_id
+        tier = int(row["tier"])
+        enabled = tier >= config.DRUG_SUPPLY_CHAIN_TIER_MIN
+        self.add_item(SupplyChainDrugSelect(cog, guild_id, user_id, enabled=enabled))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Not your panel.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Disable supply chain", style=discord.ButtonStyle.danger, row=1)
+    async def disable_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await self.cog.bot.db.set_supply_chain_drug(self.user_id, self.guild_id, None)
+        row = await self.cog.bot.db.get_business(self.user_id, self.guild_id)
+        embed = build_supply_chain_embed(row)
+        view = SupplyChainView(self.cog, self.guild_id, self.user_id, row=row)
+        embed.description = "Supply chain disabled."
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+async def send_supply_chain_panel(
+    interaction: discord.Interaction,
+    cog: commands.Cog,
+    guild_id: int,
+    user_id: int,
+) -> None:
+    row = await cog.bot.db.get_business(user_id, guild_id)
+    if row is None:
+        await interaction.response.send_message("You don't own a business.", ephemeral=True)
+        return
+    embed = build_supply_chain_embed(row)
+    view = SupplyChainView(cog, guild_id, user_id, row=row)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 def build_prestige_embed(row: object) -> discord.Embed:

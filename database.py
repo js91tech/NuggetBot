@@ -8788,6 +8788,10 @@ class Database:
     async def contest_district_war(
         self, user_id: int, guild_id: int, district_id: str,
     ) -> dict[str, object]:
+        from utils.districts import district_by_id
+
+        if district_by_id(district_id) is None:
+            return {"error": "invalid_district"}
         crew = await self.get_crew_membership(user_id, guild_id)
         if crew is None:
             return {"error": "no_crew"}
@@ -8795,27 +8799,29 @@ class Database:
             cursor = await self.conn.execute(
                 """
                 SELECT influence FROM district_influence
-                WHERE guild_id = ? AND district_id = ? AND entity_type = 'crew' AND entity_id = ?
+                WHERE guild_id = ? AND district_id = ? AND entity_type = 'user' AND entity_id = ?
                 """,
-                (guild_id, district_id, crew),
+                (guild_id, district_id, str(user_id)),
             )
             row = await cursor.fetchone()
             influence = float(row["influence"]) if row else 0.0
             if influence < config.DISTRICT_WAR_CONTEST_COST:
                 await self.conn.commit()
-                return {"error": "insufficient_influence"}
+                return {"error": "insufficient_influence", "needed": config.DISTRICT_WAR_CONTEST_COST}
             new_inf = influence - config.DISTRICT_WAR_CONTEST_COST
             await self.conn.execute(
                 """
-                INSERT INTO district_influence (guild_id, district_id, entity_type, entity_id, influence, updated_at)
-                VALUES (?, ?, 'crew', ?, ?, ?)
+                INSERT INTO district_influence (
+                    guild_id, district_id, entity_type, entity_id, influence, updated_at
+                ) VALUES (?, ?, 'user', ?, ?, ?)
                 ON CONFLICT(guild_id, district_id, entity_type, entity_id) DO UPDATE SET
-                    influence = excluded.influence, updated_at = excluded.updated_at
+                    influence = excluded.influence,
+                    updated_at = excluded.updated_at
                 """,
-                (guild_id, district_id, crew, new_inf, time.time()),
+                (guild_id, district_id, str(user_id), new_inf, time.time()),
             )
             await self.conn.commit()
-        return {"error": None, "influence_spent": config.DISTRICT_WAR_CONTEST_COST}
+        return {"error": None, "influence_spent": config.DISTRICT_WAR_CONTEST_COST, "crew": crew}
 
     async def process_business_income(self, guild_id: int) -> None:
         """Background tick: accrue stored income for every business in a guild."""

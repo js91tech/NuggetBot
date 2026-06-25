@@ -330,10 +330,16 @@ class UseSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
 
 
-class SellSelect(discord.ui.Select):
-    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int, options: list[discord.SelectOption]) -> None:
+class SellChannelSelect(discord.ui.Select):
+    def __init__(
+        self,
+        cog: commands.Cog,
+        guild_id: int,
+        user_id: int,
+        options: list[discord.SelectOption],
+    ) -> None:
         super().__init__(
-            placeholder="Sell product on the street…",
+            placeholder="Street sell or wholesale (rank 7+)…",
             options=options or [discord.SelectOption(label="Empty stash", value="_none")],
             disabled=not options,
             row=1,
@@ -343,20 +349,68 @@ class SellSelect(discord.ui.Select):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "_none":
+            await interaction.response.send_message("Nothing to sell.", ephemeral=True)
+            return
+        channel, drug_id = self.values[0].split(":", 1)
         await interaction.response.send_modal(
-            StreetSellModal(self.cog, self.guild_id, self.user_id, self.values[0]),
+            SellQuantityModal(self.cog, self.guild_id, self.user_id, drug_id, channel=channel),
         )
 
 
-class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
+def build_sell_channel_options(inventory: dict[str, int], *, rank: int) -> list[discord.SelectOption]:
+    from utils.dealer_ranks import can_wholesale
+
+    options: list[discord.SelectOption] = []
+    for drug_id, qty in inventory.items():
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            continue
+        options.append(
+            discord.SelectOption(
+                label=f"Street: {defn.name} (×{qty})",
+                value=f"street:{drug_id}",
+                description="Volatile price · raid risk"[:100],
+                emoji=defn.emoji,
+            ),
+        )
+        if can_wholesale(rank):
+            unit = defn.street_price * config.DRUG_WHOLESALE_PRICE_FACTOR
+            options.append(
+                discord.SelectOption(
+                    label=f"Wholesale: {defn.name}",
+                    value=f"wholesale:{drug_id}",
+                    description=f"Fixed ~{fmt_amount(unit)}/u · no raids"[:100],
+                    emoji=defn.emoji,
+                ),
+            )
+        if len(options) >= 25:
+            break
+    return options[:25]
+
+
+class SellQuantityModal(discord.ui.Modal, title="Sell product"):
     quantity = discord.ui.TextInput(label="Quantity to sell", placeholder="e.g. 5", required=True, max_length=8)
 
-    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int, drug_id: str) -> None:
+    def __init__(
+        self,
+        cog: commands.Cog,
+        guild_id: int,
+        user_id: int,
+        drug_id: str,
+        *,
+        channel: str,
+    ) -> None:
         super().__init__()
         self.cog = cog
         self.guild_id = guild_id
         self.user_id = user_id
         self.drug_id = drug_id
+        self.channel = channel
+        defn = drug_by_id(drug_id)
+        if defn is not None:
+            label = "Wholesale" if channel == "wholesale" else "Street"
+            self.title = f"{label}: {defn.name}"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -367,7 +421,20 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
         if qty <= 0:
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
             return
-        result = await self.cog.bot.db.sell_drugs_street(self.user_id, self.guild_id, self.drug_id, qty)
+        if self.channel == "wholesale":
+            result = await self.cog.bot.db.sell_drugs_wholesale(
+                self.user_id, self.guild_id, self.drug_id, qty,
+            )
+            if result.get("error") == "rank_locked":
+                await interaction.response.send_message(
+                    f"Wholesale unlocks at dealer rank **{config.DEALER_RANK_WHOLESALE_UNLOCK}**.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            result = await self.cog.bot.db.sell_drugs_street(
+                self.user_id, self.guild_id, self.drug_id, qty,
+            )
         if result.get("error"):
             messages = {
                 "invalid_drug": "Unknown strain.",
@@ -383,7 +450,12 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
         name = defn.name if defn else self.drug_id
         view = await DrugLabView.build(self.cog, self.guild_id, self.user_id)
         embed, file = await build_lab_embed(self.cog, self.guild_id, self.user_id)
-        if result.get("raided"):
+        if self.channel == "wholesale":
+            embed.description = (
+                f"📦 Wholesale: **{int(result['quantity'])} {name}** for "
+                f"**{fmt_amount(float(result['total']))}** (no raid risk)."
+            )
+        elif result.get("raided"):
             embed.description = (
                 f"🚨 **Raided!** Lost **{int(result['lost'])} {name}** in a bust. No payout."
             )
@@ -425,8 +497,13 @@ class DrugLabView(discord.ui.View):
         view.add_item(PlantCategorySelect(view, selected=category))
         view.add_item(PlantSelect(cog, guild_id, user_id, category=category))
         inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
+        stats = await cog.bot.db.get_drug_stats(user_id, guild_id)
+        from utils.dealer_ranks import dealer_rank
+
+        rank = dealer_rank(stats["units_sold"])
+        sell_options = build_sell_channel_options(inventory, rank=rank)
+        view.add_item(SellChannelSelect(cog, guild_id, user_id, sell_options))
         options = stash_select_options(inventory)
-        view.add_item(SellSelect(cog, guild_id, user_id, options))
         grows = await cog.bot.db.list_drug_grows(user_id, guild_id)
         fert_counts: dict[str, int] = {}
         for fert in FERTILIZERS:

@@ -1,6 +1,7 @@
 """Interactive district map: relocate a business and expand influence."""
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 import discord
@@ -42,8 +43,8 @@ async def build_district_embed(
         title="🗺️ Business Districts",
         description=(
             "Relocate your business to a district for an income bonus, and spend "
-            "nuggets to build **influence**. Influence is a server-wide race that "
-            "powers Market Expansion."
+            "nuggets to build **influence**. Crews with the most combined influence "
+            "control districts weekly (+5% member income). Contest costs influence."
         ),
         color=discord.Color.teal(),
     )
@@ -81,6 +82,24 @@ async def build_district_embed(
                 f"Relocate fee {fmt_amount(relocate_cost(int(row['tier'])))}"
             ),
         )
+        cursor = await cog.bot.db.conn.execute(
+            """
+            SELECT crew_name, bonus_ends_at FROM district_war_control
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild.id, current),
+        )
+        war_row = await cursor.fetchone()
+        if war_row is not None and current and float(war_row["bonus_ends_at"]) > time.time():
+            pct = int(config.DISTRICT_WAR_CONTROL_BONUS * 100)
+            embed.add_field(
+                name="District war",
+                value=(
+                    f"🏴 **{war_row['crew_name']}** controls this district "
+                    f"(+{pct}% member income until <t:{int(float(war_row['bonus_ends_at']))}:R>)"
+                ),
+                inline=False,
+            )
     else:
         embed.set_footer(text="Create a business with /business create to relocate it.")
     return embed
@@ -219,6 +238,58 @@ class InfluenceSelect(discord.ui.Select):
         )
 
 
+class ContestSelect(discord.ui.Select):
+    def __init__(self, cog: commands.Cog, guild_id: int, user_id: int) -> None:
+        options = [
+            discord.SelectOption(
+                label=defn.name,
+                value=defn.district_id,
+                description=f"Spend {config.DISTRICT_WAR_CONTEST_COST} influence to contest"[:100],
+                emoji=defn.emoji,
+            )
+            for defn in DISTRICT_MAP.values()
+        ]
+        super().__init__(
+            placeholder="Contest district war (crew, costs influence)…",
+            options=options,
+            row=2,
+        )
+        self.cog = cog
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        district_id = self.values[0]
+        result = await self.cog.bot.db.contest_district_war(
+            self.user_id, self.guild_id, district_id,
+        )
+        if result.get("error") == "no_crew":
+            await interaction.response.send_message(
+                "Join a crew to contest district control.", ephemeral=True,
+            )
+            return
+        if result.get("error") == "insufficient_influence":
+            needed = int(result.get("needed", config.DISTRICT_WAR_CONTEST_COST))
+            await interaction.response.send_message(
+                f"You need **{needed}** influence in that district. Buy influence first.",
+                ephemeral=True,
+            )
+            return
+        if result.get("error"):
+            await interaction.response.send_message("Could not contest.", ephemeral=True)
+            return
+        defn = district_by_id(district_id)
+        guild = interaction.guild
+        view = DistrictMapView(self.cog, self.guild_id, self.user_id)
+        embed, files = await build_district_payload(self.cog, guild, self.user_id)
+        embed.description = (
+            f"⚔️ **{result.get('crew', 'Your crew')}** contested "
+            f"**{defn.name if defn else district_id}** "
+            f"(−{int(result['influence_spent'])} influence)."
+        )
+        await interaction.response.edit_message(embed=embed, view=view, attachments=files)
+
+
 class DistrictMapView(discord.ui.View):
     def __init__(self, cog: commands.Cog, guild_id: int, user_id: int) -> None:
         super().__init__(timeout=180.0)
@@ -227,6 +298,7 @@ class DistrictMapView(discord.ui.View):
         self.user_id = user_id
         self.add_item(RelocateSelect(cog, guild_id, user_id))
         self.add_item(InfluenceSelect(cog, guild_id, user_id))
+        self.add_item(ContestSelect(cog, guild_id, user_id))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -236,7 +308,7 @@ class DistrictMapView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=3)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
         embed, files = await build_district_payload(self.cog, interaction.guild, self.user_id)
