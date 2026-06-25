@@ -9761,7 +9761,8 @@ class Database:
                 if defn is None:
                     await self.conn.execute("DELETE FROM crew_cartel_grows WHERE grow_id = ?", (grow_id,))
                     continue
-                amount = roll_yield(defn, yield_mult=float(row["yield_mult"] or 1.0))
+                amount = roll_yield(defn)
+                amount = max(1, int(round(amount * float(row["yield_mult"] or 1.0))))
                 await self.conn.execute(
                     """
                     INSERT INTO crew_cartel_stash (guild_id, crew_name, drug_id, quantity)
