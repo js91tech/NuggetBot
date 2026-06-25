@@ -90,5 +90,30 @@ class DrugLabUIViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_kwargs["attachments"][0].filename, "lab.png")
         self.assertEqual(call_kwargs["embed"].description, "refreshed")
 
+    async def test_lab_embed_clips_stash_over_discord_limit(self) -> None:
+        from utils.drug_ui import build_lab_embed
+        from utils.drugs import DRUGS
+
+        cog = MagicMock()
+        cog.bot.db = self.db
+        for drug in DRUGS:
+            await self.db.conn.execute(
+                """
+                INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id, drug_id) DO UPDATE SET quantity = excluded.quantity
+                """,
+                (self.user_id, self.guild_id, drug.drug_id, 5),
+            )
+        await self.db.conn.commit()
+        embed, _banner = await build_lab_embed(cog, self.guild_id, self.user_id)
+        stash_field = next(f for f in embed.fields if f.name == "Stash")
+        self.assertLessEqual(len(stash_field.value), 1024)
+        view = await DrugLabView.build(cog, self.guild_id, self.user_id)
+        stash_select = next(c for c in view.children if type(c).__name__ == "StashActionSelect")
+        self.assertFalse(stash_select.disabled)
+        self.assertGreater(len(stash_select.options), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
