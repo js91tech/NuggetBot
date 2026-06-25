@@ -3638,6 +3638,73 @@ class Database:
             )
             await self.conn.commit()
 
+    async def ensure_equipment_gear_instance_links(self, user_id: int, guild_id: int) -> int:
+        """Attach gear_instance_id to equipped slots that only have item_id."""
+        from items import get_item, is_gear_instance_item
+
+        records = await self.get_equipment_records(user_id, guild_id)
+        linked = 0
+        async with self._write_lock:
+            for slot, rec in records.items():
+                item_id = rec.get("item_id")
+                if not item_id:
+                    continue
+                item = get_item(str(item_id))
+                if not is_gear_instance_item(item):
+                    continue
+                if rec.get("gear_instance_id") is not None:
+                    continue
+                cursor = await self.conn.execute(
+                    """
+                    SELECT instance_id
+                    FROM gear_instances
+                    WHERE guild_id = ? AND user_id = ? AND item_id = ? AND is_broken = 0
+                    ORDER BY enhancement_level DESC, instance_id DESC
+                    LIMIT 1
+                    """,
+                    (guild_id, user_id, str(item_id)),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    continue
+                await self.conn.execute(
+                    """
+                    UPDATE equipment
+                    SET gear_instance_id = ?
+                    WHERE guild_id = ? AND user_id = ? AND slot = ?
+                    """,
+                    (int(row["instance_id"]), guild_id, user_id, slot),
+                )
+                linked += 1
+            await self.conn.commit()
+        return linked
+
+    async def attach_gear_instance_to_equipped_slots(
+        self,
+        user_id: int,
+        guild_id: int,
+        instance_id: int,
+    ) -> None:
+        """Point equipped slots at this instance when they wear the same item."""
+        row = await self.get_gear_instance(instance_id, guild_id)
+        if row is None or int(row["user_id"]) != user_id:
+            return
+        item_id = str(row["item_id"])
+        records = await self.get_equipment_records(user_id, guild_id)
+        async with self._write_lock:
+            for slot, rec in records.items():
+                if str(rec.get("item_id")) != item_id:
+                    continue
+                await self.conn.execute(
+                    """
+                    UPDATE equipment
+                    SET gear_instance_id = ?
+                    WHERE guild_id = ? AND user_id = ? AND slot = ?
+                    """,
+                    (instance_id, guild_id, user_id, slot),
+                )
+            await self.conn.commit()
+
     async def repair_gear_instance(self, instance_id: int, guild_id: int) -> bool:
         async with self._write_lock:
             cursor = await self.conn.execute(

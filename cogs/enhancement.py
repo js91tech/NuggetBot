@@ -16,7 +16,7 @@ from utils.helpers import fmt_amount, guild_only_message
 
 
 class EnhanceSelect(discord.ui.Select):
-    def __init__(self, view: EnhanceView) -> None:
+    def __init__(self, view: "EnhanceView") -> None:
         self._view = view
         options: list[discord.SelectOption] = []
         for row in view.instances[:25]:
@@ -33,6 +33,7 @@ class EnhanceSelect(discord.ui.Select):
                     label=label,
                     value=str(row["instance_id"]),
                     description=item.category.title(),
+                    default=view.instance_id == int(row["instance_id"]),
                 ),
             )
         super().__init__(
@@ -54,7 +55,7 @@ class EnhanceSelect(discord.ui.Select):
 class EnhanceView(discord.ui.View):
     def __init__(
         self,
-        cog: Enhancement,
+        cog: "Enhancement",
         guild_id: int,
         user_id: int,
         instances: list,
@@ -78,9 +79,21 @@ class EnhanceView(discord.ui.View):
                 return row
         return None
 
+    def _refreshed(self) -> EnhanceView:
+        return EnhanceView(
+            self.cog,
+            self.guild_id,
+            self.user_id,
+            self.instances,
+            instance_id=self.instance_id,
+        )
+
     async def refresh(self, interaction: discord.Interaction) -> None:
-        embed = await self.cog.build_enhance_embed(self.guild_id, self.user_id, self._selected_row())
-        await interaction.response.edit_message(embed=embed, view=self)
+        view = self._refreshed()
+        embed = await self.cog.build_enhance_embed(
+            self.guild_id, self.user_id, view._selected_row(),
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -132,24 +145,33 @@ class EnhanceView(discord.ui.View):
                 )
             await interaction.response.send_message("Could not debit nuggets.", ephemeral=True)
             return
+        instance_id = int(row["instance_id"])
         result = roll_enhancement(level)
         await self.cog.bot.db.set_gear_instance_level(
-            int(row["instance_id"]),
+            instance_id,
             self.guild_id,
             result.new_level,
             broken=result.broken,
         )
-        embed = discord.Embed(
-            title="Enhancement result",
-            description=result.message,
-            color=discord.Color.green() if result.success else discord.Color.red(),
+        await self.cog.bot.db.attach_gear_instance_to_equipped_slots(
+            self.user_id, self.guild_id, instance_id,
         )
         self.instances = await self.cog.bot.db.list_gear_instances(self.user_id, self.guild_id)
-        await interaction.response.edit_message(embed=embed, view=self)
+        view = self._refreshed()
+        panel = await self.cog.build_enhance_embed(
+            self.guild_id, self.user_id, view._selected_row(),
+        )
+        embed = discord.Embed(
+            title=panel.title,
+            description=f"{result.message}\n\n{panel.description}",
+            color=discord.Color.green() if result.success else discord.Color.red(),
+        )
+        embed.set_footer(text="Tap **Enhance** again to keep going.")
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class RepairButton(discord.ui.Button):
-    def __init__(self, cog: Enhancement, guild_id: int, user_id: int, instance_id: int, label: str) -> None:
+    def __init__(self, cog: "Enhancement", guild_id: int, user_id: int, instance_id: int, label: str) -> None:
         super().__init__(label=label[:80], style=discord.ButtonStyle.primary)
         self.cog = cog
         self.guild_id = guild_id
@@ -184,6 +206,17 @@ class RepairButton(discord.ui.Button):
 class Enhancement(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    async def _default_instance_id(self, guild_id: int, user_id: int) -> int | None:
+        records = await self.bot.db.get_equipment_records(user_id, guild_id)
+        for slot in ("weapon", "off_hand", "armor", "ring", "amulet"):
+            rec = records.get(slot)
+            if not rec:
+                continue
+            inst = rec.get("gear_instance_id")
+            if inst is not None:
+                return int(inst)
+        return None
 
     async def build_enhance_embed(self, guild_id: int, user_id: int, row) -> discord.Embed:
         if row is None:
@@ -223,6 +256,9 @@ class Enhancement(commands.Cog):
         await self.bot.db.sync_gear_instances_from_inventory(
             interaction.user.id, interaction.guild_id,
         )
+        await self.bot.db.ensure_equipment_gear_instance_links(
+            interaction.user.id, interaction.guild_id,
+        )
         gear_rows = await self.bot.db.list_gear_instances(interaction.user.id, interaction.guild_id)
         if not gear_rows:
             await interaction.response.send_message(
@@ -230,8 +266,21 @@ class Enhancement(commands.Cog):
                 ephemeral=True,
             )
             return
-        view = EnhanceView(self, interaction.guild_id, interaction.user.id, gear_rows)
-        embed = await self.build_enhance_embed(interaction.guild_id, interaction.user.id, None)
+        default_id = await self._default_instance_id(interaction.guild_id, interaction.user.id)
+        selected = None
+        if default_id is not None:
+            for row in gear_rows:
+                if int(row["instance_id"]) == default_id:
+                    selected = row
+                    break
+        view = EnhanceView(
+            self,
+            interaction.guild_id,
+            interaction.user.id,
+            gear_rows,
+            instance_id=default_id,
+        )
+        embed = await self.build_enhance_embed(interaction.guild_id, interaction.user.id, selected)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="repair-gear", description="Repair broken enhanced gear (10% of base item price).")
