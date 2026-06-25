@@ -4,10 +4,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from database import Database
-from utils.drug_ui import DrugLabView
+from utils.drug_ui import DrugLabView, _apply_lab_panel, build_lab_embed
+from utils.drugs import DRUGS
 
 
 class DrugLabUIViewTests(unittest.IsolatedAsyncioTestCase):
@@ -68,10 +69,6 @@ class DrugLabUIViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(grows, [])
 
     async def test_apply_lab_panel_reattaches_banner(self) -> None:
-        from unittest.mock import AsyncMock
-
-        from utils.drug_ui import _apply_lab_panel, build_lab_embed
-
         cog = MagicMock()
         cog.bot.db = self.db
         embed, banner = await build_lab_embed(cog, self.guild_id, self.user_id)
@@ -89,6 +86,24 @@ class DrugLabUIViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("attachments", call_kwargs)
         self.assertEqual(call_kwargs["attachments"][0].filename, "lab.png")
         self.assertEqual(call_kwargs["embed"].description, "refreshed")
+
+    async def test_lab_embed_clips_large_stash_field(self) -> None:
+        cog = MagicMock()
+        cog.bot.db = self.db
+        for drug in DRUGS:
+            await self.db.conn.execute(
+                """
+                INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id, drug_id) DO UPDATE SET quantity = excluded.quantity
+                """,
+                (self.user_id, self.guild_id, drug.drug_id, 99),
+            )
+        await self.db.conn.commit()
+        embed, _banner = await build_lab_embed(cog, self.guild_id, self.user_id)
+        stash_field = next(f for f in embed.fields if f.name == "Stash")
+        self.assertLessEqual(len(stash_field.value), 1024)
+
 
 if __name__ == "__main__":
     unittest.main()
