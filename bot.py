@@ -48,6 +48,7 @@ COGS = (
     "cogs.enhancement",
     "cogs.trade",
     "cogs.retention",
+    "cogs.market",
     "cogs.admin",
 )
 

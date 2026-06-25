@@ -51,10 +51,12 @@ class Retention(commands.Cog):
         self.bot = bot
         self.notify_tick.start()
         self.trade_expire_tick.start()
+        self.retention_week_tick.start()
 
     def cog_unload(self) -> None:
         self.notify_tick.cancel()
         self.trade_expire_tick.cancel()
+        self.retention_week_tick.cancel()
 
     @tasks.loop(seconds=config.NOTIFY_TICK_SECONDS)
     async def notify_tick(self) -> None:
@@ -72,6 +74,42 @@ class Retention(commands.Cog):
 
     @trade_expire_tick.before_loop
     async def before_trade_expire_tick(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=1)
+    async def retention_week_tick(self) -> None:
+        for guild in self.bot.guilds:
+            try:
+                result = await self.bot.db.maybe_advance_retention_week(guild.id)
+            except Exception:
+                logging.exception("retention week tick failed guild=%s", guild.id)
+                continue
+            if not result:
+                continue
+            channel = guild.system_channel
+            if channel is None:
+                from utils.helpers import resolve_main_channel
+                channel = await resolve_main_channel(guild, self.bot.db)
+            if channel is None:
+                continue
+            if result.get("crew_winner"):
+                import contextlib
+
+                embed = discord.Embed(
+                    title="🏆 Crew weekly challenge",
+                    description=(
+                        f"**{result['crew_winner']}** wins week **{result['crew_week']}** "
+                        f"(score **{int(float(result['crew_score'])):,}**)!\n"
+                        f"Treasury +**{fmt_amount(config.CREW_CHALLENGE_WINNER_TREASURY)}** · "
+                        f"each member +**{fmt_amount(config.CREW_CHALLENGE_MEMBER_BONUS)}**"
+                    ),
+                    color=discord.Color.gold(),
+                )
+                with contextlib.suppress(discord.HTTPException):
+                    await channel.send(embed=embed)
+
+    @retention_week_tick.before_loop
+    async def before_retention_week_tick(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _maybe_dm(
@@ -222,6 +260,7 @@ class Retention(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
         guild_id = interaction.guild_id
+        await self.bot.db.maybe_advance_retention_week(guild_id)
         week_id = self.bot.db.current_week_id()
         embed = discord.Embed(
             title=f"Weekly boards — {week_id}",
@@ -369,6 +408,124 @@ class Retention(commands.Cog):
             f"**{fmt_amount(config.REFERRAL_REFEREE_REWARD)}**.",
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="crew-challenge",
+        description="Crew weekly activity standings (boss, business, drug sales).",
+    )
+    @app_commands.guild_only()
+    async def crew_challenge(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        week_id = self.bot.db.current_week_id()
+        rows = await self.bot.db.get_crew_weekly_standings(interaction.guild_id, week_id)
+        embed = discord.Embed(
+            title=f"Crew challenge — {week_id}",
+            description=(
+                "Score = boss damage + business collected + "
+                f"drug sales × {int(config.CREW_CHALLENGE_DRUG_WEIGHT)}"
+            ),
+            color=discord.Color.dark_teal(),
+        )
+        if not rows:
+            embed.add_field(name="Standings", value="_No activity yet this week_", inline=False)
+        else:
+            lines = [
+                f"**{i}.** {r['crew_name']} — **{int(float(r['activity_score'])):,}**"
+                for i, r in enumerate(rows, 1)
+            ]
+            embed.add_field(name="Standings", value="\n".join(lines), inline=False)
+        embed.set_footer(
+            text=(
+                f"Winner: +{fmt_amount(config.CREW_CHALLENGE_WINNER_TREASURY)} treasury · "
+                f"+{fmt_amount(config.CREW_CHALLENGE_MEMBER_BONUS)} per member"
+            ),
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="milestones", description="Claim one-time retention milestone rewards.")
+    @app_commands.describe(milestone_id="Milestone to claim (omit to view all)")
+    @app_commands.guild_only()
+    async def milestones(
+        self,
+        interaction: discord.Interaction,
+        milestone_id: str | None = None,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        from utils.milestones import MILESTONES, milestone_eligible, milestone_reward
+
+        uid = interaction.user.id
+        gid = interaction.guild_id
+        claimed = await self.bot.db.list_claimed_milestones(uid, gid)
+
+        if milestone_id:
+            mid = milestone_id.strip().lower()
+            if mid not in config.MILESTONE_REWARDS:
+                await interaction.response.send_message("Unknown milestone.", ephemeral=True)
+                return
+            if mid in claimed:
+                await interaction.response.send_message("Already claimed.", ephemeral=True)
+                return
+            if not await milestone_eligible(self.bot.db, uid, gid, mid):
+                await interaction.response.send_message(
+                    "Requirements not met yet.", ephemeral=True,
+                )
+                return
+            reward, err = await self.bot.db.claim_milestone(uid, gid, mid)
+            if err:
+                await interaction.response.send_message("Could not claim.", ephemeral=True)
+                return
+            await interaction.response.send_message(
+                f"Claimed **{fmt_amount(reward)}**!", ephemeral=True,
+            )
+            return
+
+        lines: list[str] = []
+        for m in MILESTONES:
+            reward = milestone_reward(m.milestone_id)
+            if m.milestone_id in claimed:
+                status = "✅ claimed"
+            elif await milestone_eligible(self.bot.db, uid, gid, m.milestone_id):
+                status = f"🎁 ready — `/milestones milestone_id:{m.milestone_id}`"
+            else:
+                status = "🔒 locked"
+            lines.append(f"**{m.name}** — {fmt_amount(reward)} · {status}\n_{m.description}_")
+        embed = discord.Embed(
+            title="Retention milestones",
+            description="\n\n".join(lines),
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="contracts", description="Your active high-reward contract (resets every few days).")
+    @app_commands.guild_only()
+    async def contracts(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        from utils.quests import (
+            TRACK_CONTRACT,
+            contract_reset_key,
+            ensure_contract_quest,
+            format_quest_lines,
+        )
+
+        await ensure_contract_quest(self.bot.db, interaction.guild_id, interaction.user.id)
+        rows = await self.bot.db.list_user_quests(
+            interaction.guild_id, interaction.user.id, TRACK_CONTRACT,
+        )
+        embed = discord.Embed(
+            title="Active contract",
+            description="\n".join(format_quest_lines(rows, track=TRACK_CONTRACT)) or "_None_",
+            color=discord.Color.dark_red(),
+        )
+        embed.set_footer(
+            text=f"Resets every {config.CONTRACT_RESET_DAYS} days · period {contract_reset_key()}",
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

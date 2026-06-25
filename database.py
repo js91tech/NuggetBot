@@ -506,6 +506,61 @@ class Database:
         await self._migrate_empire_expansion()
         await self._migrate_tier1_retention()
         await self._migrate_tier2_retention()
+        await self._migrate_tier3_retention()
+
+    async def _migrate_tier3_retention(self) -> None:
+        """Crew weekly activity, milestones, gear market, retention guild state."""
+        pk = "SERIAL PRIMARY KEY" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crew_weekly_activity (
+                guild_id BIGINT NOT NULL,
+                crew_name TEXT NOT NULL,
+                week_id TEXT NOT NULL,
+                activity_score REAL NOT NULL DEFAULT 0 CHECK (activity_score >= 0),
+                PRIMARY KEY (guild_id, crew_name, week_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_milestones (
+                user_id BIGINT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                milestone_id TEXT NOT NULL,
+                claimed_at REAL NOT NULL,
+                PRIMARY KEY (user_id, guild_id, milestone_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS gear_market_listings (
+                listing_id {pk},
+                guild_id BIGINT NOT NULL,
+                seller_id BIGINT NOT NULL,
+                instance_id INTEGER NOT NULL,
+                price REAL NOT NULL CHECK (price > 0),
+                created_at REAL NOT NULL
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_gear_market_guild
+            ON gear_market_listings(guild_id, price)
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS guild_retention_state (
+                guild_id BIGINT PRIMARY KEY,
+                last_crew_week_resolved TEXT NOT NULL DEFAULT '',
+                last_podium_week_paid TEXT NOT NULL DEFAULT ''
+            )
+            """,
+        )
+        await self.conn.commit()
 
     async def _migrate_tier2_retention(self) -> None:
         """Weekly challenges support, login calendar, activity pass, referrals."""
@@ -12202,14 +12257,37 @@ class Database:
                 max(0, int(drug_sales)),
             ),
         )
+        activity_delta = (
+            max(0.0, float(boss_damage))
+            + max(0.0, float(business_collected))
+            + max(0, int(drug_sales)) * config.CREW_CHALLENGE_DRUG_WEIGHT
+        )
+        if activity_delta > 0:
+            crew_cursor = await self.conn.execute(
+                "SELECT crew_name FROM crew_members WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+            crew_row = await crew_cursor.fetchone()
+            if crew_row is not None:
+                crew_name = str(crew_row["crew_name"])
+                await self.conn.execute(
+                    """
+                    INSERT INTO crew_weekly_activity (
+                        guild_id, crew_name, week_id, activity_score
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(guild_id, crew_name, week_id) DO UPDATE SET
+                        activity_score = crew_weekly_activity.activity_score + excluded.activity_score
+                    """,
+                    (guild_id, crew_name, week_id, activity_delta),
+                )
 
     async def weekly_leaderboard(
-        self, guild_id: int, column: str, *, limit: int = 10,
+        self, guild_id: int, column: str, *, limit: int = 10, week_id: str | None = None,
     ) -> list[aiosqlite.Row]:
         allowed = {"boss_damage", "business_collected", "drug_sales"}
         if column not in allowed:
             raise ValueError(f"Invalid weekly column: {column}")
-        week_id = self.current_week_id()
+        wid = week_id or self.current_week_id()
         cursor = await self.conn.execute(
             f"""
             SELECT user_id, {column} AS score
@@ -12218,7 +12296,7 @@ class Database:
             ORDER BY {column} DESC
             LIMIT ?
             """,
-            (guild_id, week_id, limit),
+            (guild_id, wid, limit),
         )
         return list(await cursor.fetchall())
 
@@ -12872,6 +12950,369 @@ class Database:
                     referrer_id,
                     guild_id,
                 ),
+            )
+            await self.conn.commit()
+        return None
+
+    async def has_completed_trade(self, user_id: int, guild_id: int) -> bool:
+        value = await self.fetch_value(
+            """
+            SELECT COUNT(*) FROM pending_trades
+            WHERE guild_id = ? AND status = 'completed'
+              AND (initiator_id = ? OR receiver_id = ?)
+            """,
+            (guild_id, user_id, user_id),
+        )
+        return int(value or 0) > 0
+
+    # --- Tier 3 retention: crew challenge, milestones, gear market, weekly podium ---
+
+    async def get_crew_weekly_standings(
+        self, guild_id: int, week_id: str | None = None, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        wid = week_id or self.current_week_id()
+        cursor = await self.conn.execute(
+            """
+            SELECT crew_name, activity_score
+            FROM crew_weekly_activity
+            WHERE guild_id = ? AND week_id = ? AND activity_score > 0
+            ORDER BY activity_score DESC
+            LIMIT ?
+            """,
+            (guild_id, wid, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def _ensure_guild_retention_state_no_lock(self, guild_id: int) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO guild_retention_state (guild_id)
+            VALUES (?)
+            ON CONFLICT(guild_id) DO NOTHING
+            """,
+            (guild_id,),
+        )
+
+    async def maybe_advance_retention_week(self, guild_id: int) -> dict[str, object]:
+        """Resolve crew challenge and weekly podium when the ISO week rolls over."""
+        current_week = self.current_week_id()
+        result: dict[str, object] = {}
+        async with self._write_lock:
+            await self._ensure_guild_retention_state_no_lock(guild_id)
+            cursor = await self.conn.execute(
+                """
+                SELECT last_crew_week_resolved, last_podium_week_paid
+                FROM guild_retention_state WHERE guild_id = ?
+                """,
+                (guild_id,),
+            )
+            row = await cursor.fetchone()
+            last_crew = str(row["last_crew_week_resolved"] or "") if row else ""
+            last_podium = str(row["last_podium_week_paid"] or "") if row else ""
+
+            if last_crew and last_crew != current_week:
+                standings = await self.conn.execute(
+                    """
+                    SELECT crew_name, activity_score FROM crew_weekly_activity
+                    WHERE guild_id = ? AND week_id = ?
+                    ORDER BY activity_score DESC LIMIT 1
+                    """,
+                    (guild_id, last_crew),
+                )
+                winner = await standings.fetchone()
+                if winner is not None and float(winner["activity_score"]) > 0:
+                    crew_name = str(winner["crew_name"])
+                    await self.conn.execute(
+                        """
+                        UPDATE crew_stats SET treasury = treasury + ?
+                        WHERE guild_id = ? AND crew_name = ?
+                        """,
+                        (config.CREW_CHALLENGE_WINNER_TREASURY, guild_id, crew_name),
+                    )
+                    members = await self.conn.execute(
+                        "SELECT user_id FROM crew_members WHERE guild_id = ? AND crew_name = ?",
+                        (guild_id, crew_name),
+                    )
+                    for m in await members.fetchall():
+                        uid = int(m["user_id"])
+                        await self._ensure_user_no_lock(uid, guild_id)
+                        await self.conn.execute(
+                            """
+                            UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                            WHERE user_id = ? AND guild_id = ?
+                            """,
+                            (
+                                config.CREW_CHALLENGE_MEMBER_BONUS,
+                                config.CREW_CHALLENGE_MEMBER_BONUS,
+                                uid,
+                                guild_id,
+                            ),
+                        )
+                    result["crew_winner"] = crew_name
+                    result["crew_score"] = float(winner["activity_score"])
+                    result["crew_week"] = last_crew
+
+            if last_podium and last_podium != current_week:
+                for column in config.WEEKLY_PODIUM_CATEGORIES:
+                    lb = await self.weekly_leaderboard(
+                        guild_id, column, limit=3, week_id=last_podium,
+                    )
+                    for i, prow in enumerate(lb):
+                        if i >= len(config.WEEKLY_PODIUM_REWARDS):
+                            break
+                        uid = int(prow["user_id"])
+                        reward = float(config.WEEKLY_PODIUM_REWARDS[i])
+                        await self._ensure_user_no_lock(uid, guild_id)
+                        await self.conn.execute(
+                            """
+                            UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                            WHERE user_id = ? AND guild_id = ?
+                            """,
+                            (reward, reward, uid, guild_id),
+                        )
+                result["podium_week"] = last_podium
+
+            await self.conn.execute(
+                """
+                UPDATE guild_retention_state
+                SET last_crew_week_resolved = ?, last_podium_week_paid = ?
+                WHERE guild_id = ?
+                """,
+                (current_week, current_week, guild_id),
+            )
+            await self.conn.commit()
+        return result
+
+    async def list_claimed_milestones(self, user_id: int, guild_id: int) -> set[str]:
+        cursor = await self.conn.execute(
+            "SELECT milestone_id FROM user_milestones WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        return {str(r["milestone_id"]) for r in await cursor.fetchall()}
+
+    async def claim_milestone(
+        self, user_id: int, guild_id: int, milestone_id: str,
+    ) -> tuple[float, str | None]:
+        if milestone_id not in config.MILESTONE_REWARDS:
+            return 0.0, "invalid"
+        from utils.milestones import milestone_eligible
+
+        if not await milestone_eligible(self, user_id, guild_id, milestone_id):
+            return 0.0, "not_eligible"
+        claimed = await self.list_claimed_milestones(user_id, guild_id)
+        if milestone_id in claimed:
+            return 0.0, "already_claimed"
+        reward = float(config.MILESTONE_REWARDS[milestone_id])
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            dup = await self.conn.execute(
+                """
+                SELECT milestone_id FROM user_milestones
+                WHERE user_id = ? AND guild_id = ? AND milestone_id = ?
+                """,
+                (user_id, guild_id, milestone_id),
+            )
+            if await dup.fetchone() is not None:
+                await self.conn.commit()
+                return 0.0, "already_claimed"
+            await self.conn.execute(
+                """
+                INSERT INTO user_milestones (user_id, guild_id, milestone_id, claimed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, guild_id, milestone_id, time.time()),
+            )
+            await self.conn.execute(
+                """
+                UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (reward, reward, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return reward, None
+
+    async def count_referrals_made(self, user_id: int, guild_id: int) -> int:
+        value = await self.fetch_value(
+            """
+            SELECT COUNT(*) FROM user_referrals
+            WHERE guild_id = ? AND referrer_id = ?
+            """,
+            (guild_id, user_id),
+        )
+        return int(value or 0)
+
+    async def _listed_gear_instance_ids(self, user_id: int, guild_id: int) -> set[int]:
+        cursor = await self.conn.execute(
+            "SELECT instance_id FROM gear_market_listings WHERE guild_id = ? AND seller_id = ?",
+            (guild_id, user_id),
+        )
+        return {int(r["instance_id"]) for r in await cursor.fetchall()}
+
+    async def list_marketable_gear_instances(
+        self, user_id: int, guild_id: int,
+    ) -> list[aiosqlite.Row]:
+        listed = await self._listed_gear_instance_ids(user_id, guild_id)
+        rows = await self.list_tradeable_gear_instances(user_id, guild_id)
+        return [r for r in rows if int(r["instance_id"]) not in listed]
+
+    async def count_gear_listings(self, user_id: int, guild_id: int) -> int:
+        value = await self.fetch_value(
+            "SELECT COUNT(*) FROM gear_market_listings WHERE guild_id = ? AND seller_id = ?",
+            (guild_id, user_id),
+        )
+        return int(value or 0)
+
+    async def create_gear_listing(
+        self, user_id: int, guild_id: int, instance_id: int, price: float,
+    ) -> str | None:
+        if price <= 0:
+            return "invalid_price"
+        async with self._write_lock:
+            if await self.count_gear_listings(user_id, guild_id) >= config.GEAR_MARKET_MAX_LISTINGS:
+                await self.conn.commit()
+                return "too_many_listings"
+            equipped = await self._equipped_gear_instance_ids(user_id, guild_id)
+            if int(instance_id) in equipped:
+                await self.conn.commit()
+                return "equipped"
+            cursor = await self.conn.execute(
+                """
+                SELECT * FROM gear_instances
+                WHERE instance_id = ? AND guild_id = ? AND user_id = ?
+                  AND (escrow_trade_id IS NULL OR escrow_trade_id = 0)
+                """,
+                (instance_id, guild_id, user_id),
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.commit()
+                return "not_found"
+            listed = await self.conn.execute(
+                "SELECT listing_id FROM gear_market_listings WHERE guild_id = ? AND instance_id = ?",
+                (guild_id, instance_id),
+            )
+            if await listed.fetchone() is not None:
+                await self.conn.commit()
+                return "already_listed"
+            await self.conn.execute(
+                """
+                INSERT INTO gear_market_listings (guild_id, seller_id, instance_id, price, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (guild_id, user_id, instance_id, price, time.time()),
+            )
+            await self.conn.commit()
+        return None
+
+    async def list_gear_market(
+        self, guild_id: int, *, limit: int = 20,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT l.listing_id, l.seller_id, l.instance_id, l.price,
+                   g.item_id, g.enhancement_level, g.is_broken
+            FROM gear_market_listings l
+            JOIN gear_instances g ON g.instance_id = l.instance_id AND g.guild_id = l.guild_id
+            WHERE l.guild_id = ?
+            ORDER BY l.price ASC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        )
+        return list(await cursor.fetchall())
+
+    async def cancel_gear_listing(
+        self, user_id: int, guild_id: int, listing_id: int,
+    ) -> str | None:
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT seller_id FROM gear_market_listings
+                WHERE listing_id = ? AND guild_id = ?
+                """,
+                (listing_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await self.conn.commit()
+                return "not_found"
+            if int(row["seller_id"]) != user_id:
+                await self.conn.commit()
+                return "not_owner"
+            await self.conn.execute(
+                "DELETE FROM gear_market_listings WHERE listing_id = ? AND guild_id = ?",
+                (listing_id, guild_id),
+            )
+            await self.conn.commit()
+        return None
+
+    async def buy_gear_listing(
+        self, buyer_id: int, guild_id: int, listing_id: int,
+    ) -> str | None:
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT l.seller_id, l.instance_id, l.price
+                FROM gear_market_listings l
+                WHERE l.listing_id = ? AND l.guild_id = ?
+                """,
+                (listing_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await self.conn.commit()
+                return "not_found"
+            seller_id = int(row["seller_id"])
+            instance_id = int(row["instance_id"])
+            price = float(row["price"])
+            if seller_id == buyer_id:
+                await self.conn.commit()
+                return "self_buy"
+            await self._ensure_user_no_lock(buyer_id, guild_id)
+            await self._ensure_user_no_lock(seller_id, guild_id)
+            wallet = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (buyer_id, guild_id),
+            )
+            wrow = await wallet.fetchone()
+            if wrow is None or float(wrow["wallet"]) < price:
+                await self.conn.commit()
+                return "insufficient_funds"
+            inst = await self.conn.execute(
+                """
+                SELECT instance_id FROM gear_instances
+                WHERE instance_id = ? AND guild_id = ? AND user_id = ?
+                """,
+                (instance_id, guild_id, seller_id),
+            )
+            if await inst.fetchone() is None:
+                await self.conn.execute(
+                    "DELETE FROM gear_market_listings WHERE listing_id = ? AND guild_id = ?",
+                    (listing_id, guild_id),
+                )
+                await self.conn.commit()
+                return "not_found"
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (price, buyer_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE users SET wallet = wallet + ?, total_earned = total_earned + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (price, price, seller_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE gear_instances SET user_id = ?
+                WHERE instance_id = ? AND guild_id = ? AND user_id = ?
+                """,
+                (buyer_id, instance_id, guild_id, seller_id),
+            )
+            await self.conn.execute(
+                "DELETE FROM gear_market_listings WHERE listing_id = ? AND guild_id = ?",
+                (listing_id, guild_id),
             )
             await self.conn.commit()
         return None
