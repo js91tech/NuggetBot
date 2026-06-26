@@ -20,8 +20,20 @@ def item_icon_path(item_id: str) -> Path:
 
 
 def load_item_icon(item_id: str, *, size: int = ICON_SIZE) -> Image.Image:
-    """Load item PNG or render a category emoji placeholder."""
+    """Load item PNG or render a procedural / emoji placeholder."""
     path = item_icon_path(item_id)
+    if path.is_file() and path.stat().st_size > 800:
+        icon = Image.open(path).convert("RGBA")
+        if icon.size != (size, size):
+            icon = icon.resize((size, size), Image.Resampling.NEAREST)
+        return icon
+    try:
+        from utils.item_art import ITEM_ART_SPEC, generate_item_icon
+
+        if item_id in ITEM_ART_SPEC:
+            return generate_item_icon(item_id, size=size)
+    except Exception:
+        pass
     if path.is_file():
         icon = Image.open(path).convert("RGBA")
         if icon.size != (size, size):
