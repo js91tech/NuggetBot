@@ -78,10 +78,10 @@ NORMAL_CELL_IDS: tuple[str | None, ...] = (
     "chia_seeds",
     "alchemy_scrap",
     "nugget_coin",
-    None,
-    None,
-    None,
-    None,
+    "apex_annihilator",
+    "sovereign_railcannon",
+    "transcendent_voidlance",
+    "dominion_worldbreaker",
 )
 
 BATTLE_WORN_SKIP = frozenset(

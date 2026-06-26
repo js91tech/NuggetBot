@@ -203,8 +203,15 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· **Pocket** — spent at `/shop`, visible to wallet heists\n"
                     f"· **Bank** — safer storage; `/bank-heist` targets bank only\n"
                     f"· Base bank cap **{fmt_amount(config.BANK_BASE_CAPACITY)}** — "
-                    f"`/expand-bank` adds **{fmt_amount(config.BANK_EXPANSION_CAPACITY_PER_TOKEN)}** "
-                    f"for **{fmt_amount(config.BANK_EXPANSION_TOKEN_COST)}** each",
+                    "`/expand-bank` tiered expansions: "
+                    f"**+{fmt_amount(float(config.BANK_EXPANSION_TIERS[1]['capacity']))}** "
+                    f"({fmt_amount(float(config.BANK_EXPANSION_TIERS[1]['cost']))}), "
+                    f"**+{fmt_amount(float(config.BANK_EXPANSION_TIERS[2]['capacity']))}** "
+                    f"({fmt_amount(float(config.BANK_EXPANSION_TIERS[2]['cost']))}), "
+                    f"**+{fmt_amount(float(config.BANK_EXPANSION_TIERS[3]['capacity']))}** "
+                    f"({fmt_amount(float(config.BANK_EXPANSION_TIERS[3]['cost']))}), "
+                    f"**+{fmt_amount(float(config.BANK_EXPANSION_TIERS[4]['capacity']))}** "
+                    f"({fmt_amount(float(config.BANK_EXPANSION_TIERS[4]['cost']))})",
                     "**Commands**\n"
                     "`/daily` · `/balance` · `/deposit` · `/withdraw` · `/expand-bank` · "
                     "`/pay` · `/leaderboard` · `/hall-of-fame`\n"

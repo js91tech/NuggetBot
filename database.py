@@ -483,6 +483,7 @@ class Database:
         await self._migrate_territory_integration()
         await self._migrate_personal_bank()
         await self._migrate_bank_capacity()
+        await self._migrate_bank_expansion_tiers()
         await self._migrate_bank_heist()
         await self._migrate_dungeon_tiers()
         await self._migrate_scourge_virus()
@@ -1050,6 +1051,45 @@ class Database:
                     "ALTER TABLE users ADD COLUMN bank_expansions INTEGER NOT NULL DEFAULT 0 CHECK (bank_expansions >= 0)",
                 )
         await self.conn.commit()
+
+    async def _migrate_bank_expansion_tiers(self) -> None:
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_bank_expansions (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                tier INTEGER NOT NULL CHECK (tier IN (1, 2, 3, 4)),
+                quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+                PRIMARY KEY (guild_id, user_id, tier)
+            )
+            """,
+        )
+        await self.conn.commit()
+        if await self.is_one_time_job_complete("bank_expansion_tiers_v1"):
+            return
+        cursor = await self.conn.execute(
+            """
+            SELECT guild_id, user_id, bank_expansions
+            FROM users
+            WHERE bank_expansions > 0
+            """,
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            qty = max(0, int(row["bank_expansions"]))
+            if qty <= 0:
+                continue
+            await self.conn.execute(
+                """
+                INSERT INTO user_bank_expansions (guild_id, user_id, tier, quantity)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(guild_id, user_id, tier) DO UPDATE SET
+                    quantity = excluded.quantity
+                """,
+                (row["guild_id"], row["user_id"], qty),
+            )
+        await self.conn.commit()
+        await self.mark_one_time_job_complete("bank_expansion_tiers_v1")
 
     async def _migrate_territory_integration(self) -> None:
         territory_cols = [
@@ -2962,12 +3002,20 @@ class Database:
         row = await self.get_user(user_id, guild_id)
         return float(row["bank"])
 
-    async def get_bank_expansions(self, user_id: int, guild_id: int) -> int:
-        row = await self.get_user(user_id, guild_id)
-        try:
-            return max(0, int(row["bank_expansions"]))
-        except (KeyError, TypeError, ValueError):
-            return 0
+    async def get_bank_expansions(self, user_id: int, guild_id: int) -> dict[int, int]:
+        cursor = await self.conn.execute(
+            """
+            SELECT tier, quantity FROM user_bank_expansions
+            WHERE guild_id = ? AND user_id = ? AND quantity > 0
+            """,
+            (guild_id, user_id),
+        )
+        rows = await cursor.fetchall()
+        return {int(row["tier"]): int(row["quantity"]) for row in rows}
+
+    async def get_bank_expansion_total(self, user_id: int, guild_id: int) -> int:
+        expansions = await self.get_bank_expansions(user_id, guild_id)
+        return sum(expansions.values())
 
     async def get_bank_capacity(self, user_id: int, guild_id: int) -> float:
         from utils.bank_capacity import bank_capacity
@@ -2982,11 +3030,17 @@ class Database:
         expansions = await self.get_bank_expansions(user_id, guild_id)
         return bank_deposit_room(bank, expansions)
 
-    async def expand_bank_capacity(self, user_id: int, guild_id: int) -> tuple[bool, str]:
-        """Buy one bank expansion token (+capacity) for the configured nugget cost."""
+    async def expand_bank_capacity(
+        self, user_id: int, guild_id: int, tier: int = 1,
+    ) -> tuple[bool, str]:
+        """Buy one bank expansion token of the given tier (+capacity) from pocket."""
         import config
 
-        cost = float(config.BANK_EXPANSION_TOKEN_COST)
+        spec = config.BANK_EXPANSION_TIERS.get(tier)
+        if spec is None:
+            return False, "invalid_tier"
+        cost = float(spec["cost"])
+        expansions = await self.get_bank_expansions(user_id, guild_id)
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
             cursor = await self.conn.execute(
@@ -3000,13 +3054,34 @@ class Database:
             await self.conn.execute(
                 """
                 UPDATE users
-                SET wallet = wallet - ?, bank_expansions = bank_expansions + 1
+                SET wallet = wallet - ?
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (cost, user_id, guild_id),
             )
+            qty = expansions.get(tier, 0) + 1
+            await self.conn.execute(
+                """
+                INSERT INTO user_bank_expansions (guild_id, user_id, tier, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, user_id, tier) DO UPDATE SET
+                    quantity = excluded.quantity
+                """,
+                (guild_id, user_id, tier, qty),
+            )
             await self.conn.commit()
         return True, "ok"
+
+    async def _bank_expansions_for_user(self, user_id: int, guild_id: int) -> dict[int, int]:
+        cursor = await self.conn.execute(
+            """
+            SELECT tier, quantity FROM user_bank_expansions
+            WHERE guild_id = ? AND user_id = ? AND quantity > 0
+            """,
+            (guild_id, user_id),
+        )
+        rows = await cursor.fetchall()
+        return {int(row["tier"]): int(row["quantity"]) for row in rows}
 
     async def get_net_worth(self, user_id: int, guild_id: int) -> float:
         row = await self.get_user(user_id, guild_id)
@@ -3018,7 +3093,7 @@ class Database:
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
             cursor = await self.conn.execute(
-                "SELECT wallet, bank, bank_expansions FROM users WHERE user_id = ? AND guild_id = ?",
+                "SELECT wallet, bank FROM users WHERE user_id = ? AND guild_id = ?",
                 (user_id, guild_id),
             )
             row = await cursor.fetchone()
@@ -3031,7 +3106,7 @@ class Database:
                 return False
             from utils.bank_capacity import bank_deposit_room
 
-            expansions = max(0, int(row["bank_expansions"] or 0))
+            expansions = await self._bank_expansions_for_user(user_id, guild_id)
             room = bank_deposit_room(float(row["bank"]), expansions)
             if room <= 0:
                 await self.conn.commit()
@@ -3080,7 +3155,7 @@ class Database:
             await self._ensure_user_no_lock(user_id, guild_id)
             cursor = await self.conn.execute(
                 """
-                SELECT wallet, bank, bank_expansions FROM users
+                SELECT wallet, bank FROM users
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (user_id, guild_id),
@@ -3092,7 +3167,7 @@ class Database:
                 return 0.0
             from utils.bank_capacity import bank_deposit_room
 
-            expansions = max(0, int(row["bank_expansions"] or 0)) if row is not None else 0
+            expansions = await self._bank_expansions_for_user(user_id, guild_id)
             bank = float(row["bank"]) if row is not None else 0.0
             room = bank_deposit_room(bank, expansions)
             amount = min(wallet, room)
@@ -3214,6 +3289,10 @@ class Database:
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (user_id, guild_id),
+            )
+            await self.conn.execute(
+                "DELETE FROM user_bank_expansions WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
             )
             await self.conn.execute(
                 "DELETE FROM inventory WHERE guild_id = ? AND user_id = ?",
@@ -6639,6 +6718,10 @@ class Database:
                     WHERE user_id = ? AND guild_id = ?
                     """,
                     (user_id, guild_id),
+                )
+                await self.conn.execute(
+                    "DELETE FROM user_bank_expansions WHERE guild_id = ? AND user_id = ?",
+                    (guild_id, user_id),
                 )
             else:
                 await self.conn.execute(

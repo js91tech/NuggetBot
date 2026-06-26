@@ -1,52 +1,124 @@
 #!/usr/bin/env python3
-"""Generate simple placeholder PNG icons for shop items missing assets."""
+"""Generate deterministic 64×64 pixel-art item icons for shop gear."""
 from __future__ import annotations
 
-import sys
+import argparse
+import hashlib
 from pathlib import Path
 
+from PIL import Image, ImageDraw
+
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from PIL import Image, ImageDraw, ImageFont
-
-from items import ITEMS
-
-ICON_SIZE = 64
 OUT_DIR = ROOT / "assets" / "items"
+ICON_SIZE = 64
 
-EMOJI_BY_ID: dict[str, str] = {
-    "jail_key": "🔑",
-    "pick_key": "🗝️",
+NEW_ITEM_IDS: tuple[str, ...] = (
+    "apex_annihilator",
+    "sovereign_railcannon",
+    "transcendent_voidlance",
+    "dominion_worldbreaker",
+    "dominion_devastator",
+    "reaper_fang",
+    "reaper_crossbow",
+    "apotheosis_carapace",
+)
+
+ITEM_THEMES: dict[str, tuple[tuple[int, int, int], tuple[int, int, int], str]] = {
+    "apex_annihilator": ((212, 175, 55), (255, 230, 120), "gun"),
+    "sovereign_railcannon": ((120, 70, 180), (200, 150, 255), "gun"),
+    "transcendent_voidlance": ((40, 200, 220), (180, 255, 255), "gun"),
+    "dominion_worldbreaker": ((220, 80, 40), (255, 180, 80), "weapon"),
+    "dominion_devastator": ((220, 80, 40), (255, 180, 80), "gun"),
+    "reaper_fang": ((30, 90, 50), (120, 220, 140), "weapon"),
+    "reaper_crossbow": ((30, 90, 50), (120, 220, 140), "gun"),
+    "apotheosis_carapace": ((240, 230, 180), (255, 255, 220), "armor"),
 }
 
 
-def render_icon(item_id: str, emoji: str) -> Image.Image:
-    img = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (40, 44, 52, 255))
+def _seed(item_id: str) -> int:
+    digest = hashlib.sha256(item_id.encode()).hexdigest()
+    return int(digest[:8], 16)
+
+
+def _draw_weapon(draw: ImageDraw.ImageDraw, primary: tuple[int, int, int], accent: tuple[int, int, int], seed: int) -> None:
+    blade_w = 6 + (seed % 3)
+    draw.polygon([(44, 10), (44 + blade_w, 10), (18, 54), (18 - blade_w, 54)], fill=primary)
+    draw.rectangle((14, 48, 30, 56), fill=accent)
+    draw.rectangle((20, 56, 26, 60), fill=(90, 90, 100))
+
+
+def _draw_gun(draw: ImageDraw.ImageDraw, primary: tuple[int, int, int], accent: tuple[int, int, int], seed: int) -> None:
+    barrel_len = 28 + (seed % 6)
+    draw.rectangle((8, 28, 8 + barrel_len, 36), fill=primary)
+    draw.rectangle((8 + barrel_len - 4, 26, 8 + barrel_len + 2, 38), fill=accent)
+    draw.rectangle((34, 24, 50, 40), fill=primary)
+    draw.ellipse((46, 30, 54, 38), fill=accent)
+    if seed % 2:
+        draw.rectangle((36, 40, 44, 52), fill=(80, 80, 90))
+
+
+def _draw_armor(draw: ImageDraw.ImageDraw, primary: tuple[int, int, int], accent: tuple[int, int, int], seed: int) -> None:
+    draw.polygon([(32, 8), (52, 20), (52, 48), (32, 58), (12, 48), (12, 20)], fill=primary)
+    draw.polygon([(32, 16), (44, 24), (44, 44), (32, 50), (20, 44), (20, 24)], fill=accent)
+    draw.line([(32, 16), (32, 50)], fill=(60, 60, 70), width=2)
+    if seed % 2:
+        draw.ellipse((28, 30, 36, 38), fill=primary)
+
+
+def generate_icon(item_id: str, *, size: int = ICON_SIZE) -> Image.Image:
+    theme = ITEM_THEMES.get(item_id)
+    if theme is None:
+        from items import get_item
+
+        item = get_item(item_id)
+        category = item.category if item is not None else "weapon"
+        primary = (100, 110, 130)
+        accent = (180, 190, 210)
+    else:
+        primary, accent, category = theme
+    seed = _seed(item_id)
+    img = Image.new("RGBA", (size, size), (32, 36, 44, 255))
     draw = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype("DejaVuSans.ttf", 32)
-    except OSError:
-        font = ImageFont.load_default()
-    draw.text((ICON_SIZE // 2, ICON_SIZE // 2), emoji, fill=(220, 200, 120, 255), font=font, anchor="mm")
+    # Subtle tier glow border
+    draw.rectangle((2, 2, size - 3, size - 3), outline=accent, width=1)
+    if category == "weapon":
+        _draw_weapon(draw, primary, accent, seed)
+    elif category == "gun":
+        _draw_gun(draw, primary, accent, seed)
+    else:
+        _draw_armor(draw, primary, accent, seed)
     return img
 
 
-def main() -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    created = 0
-    for item_id, item in ITEMS.items():
-        if item.category != "consumable" and item_id not in EMOJI_BY_ID:
-            continue
-        path = OUT_DIR / f"{item_id}.png"
-        if path.is_file():
-            continue
-        emoji = EMOJI_BY_ID.get(item_id, "🧪")
-        render_icon(item_id, emoji).save(path)
-        created += 1
-        print(f"Wrote {path}")
-    print(f"Done — created {created} icon(s).")
+def write_icons(item_ids: tuple[str, ...] | list[str], out_dir: Path = OUT_DIR) -> list[Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for item_id in item_ids:
+        path = out_dir / f"{item_id}.png"
+        generate_icon(item_id).save(path)
+        written.append(path)
+    return written
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate shop item icons.")
+    parser.add_argument(
+        "item_ids",
+        nargs="*",
+        help="Item IDs to generate (default: all new endgame items)",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=str(OUT_DIR),
+        help="Output directory for PNG icons",
+    )
+    args = parser.parse_args()
+    ids = tuple(args.item_ids) if args.item_ids else NEW_ITEM_IDS
+    paths = write_icons(ids, Path(args.out_dir))
+    for path in paths:
+        print(path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

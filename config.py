@@ -119,8 +119,15 @@ GEAR_FIX_COST_FRACTION = 0.80
 
 # Personal bank vault — base cap; buy expansions for +capacity each.
 BANK_BASE_CAPACITY = 100_000.0
-BANK_EXPANSION_CAPACITY_PER_TOKEN = 10_000.0
-BANK_EXPANSION_TOKEN_COST = 10_000.0
+BANK_EXPANSION_TIERS: dict[int, dict[str, float | str]] = {
+    1: {"name": "Standard", "cost": 10_000.0, "capacity": 10_000.0},
+    2: {"name": "Reinforced", "cost": 50_000.0, "capacity": 50_000.0},
+    3: {"name": "Fortified", "cost": 250_000.0, "capacity": 250_000.0},
+    4: {"name": "Sovereign", "cost": 500_000.0, "capacity": 500_000.0},
+}
+# Backward-compatible aliases for tier 1 (Standard).
+BANK_EXPANSION_CAPACITY_PER_TOKEN = float(BANK_EXPANSION_TIERS[1]["capacity"])
+BANK_EXPANSION_TOKEN_COST = float(BANK_EXPANSION_TIERS[1]["cost"])
 
 # Personal bank bodyguards (defend against /bank-heist).
 BODYGUARD_MAX_TOTAL = 5

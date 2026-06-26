@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import discord
 
 import config
+from utils.bank_expansion_ui import format_bank_expansion_roster
 from utils.helpers import fmt_amount
 
 if TYPE_CHECKING:
@@ -17,7 +18,7 @@ def build_wallet_embed(
     wallet: float,
     bank: float,
     bank_capacity: float | None = None,
-    bank_expansions: int | None = None,
+    bank_expansions: dict[int, int] | None = None,
 ) -> discord.Embed:
     net = wallet + bank
     embed = discord.Embed(
@@ -33,15 +34,15 @@ def build_wallet_embed(
     embed.add_field(name="Bank", value=bank_label, inline=True)
     embed.add_field(name="Net worth", value=fmt_amount(net), inline=True)
     if bank_expansions is not None:
+        total = sum(bank_expansions.values())
         embed.add_field(
             name="Vault expansions",
-            value=f"**{bank_expansions}** token(s)",
-            inline=True,
+            value=f"{format_bank_expansion_roster(bank_expansions)} · **{total}** total",
+            inline=False,
         )
     footer = (
         f"Base bank cap {fmt_amount(config.BANK_BASE_CAPACITY)} · "
-        f"Expand +{fmt_amount(config.BANK_EXPANSION_CAPACITY_PER_TOKEN)} for "
-        f"{fmt_amount(config.BANK_EXPANSION_TOKEN_COST)} · /bank-heist targets bank"
+        f"Use Vault expansions for tiered upgrades · /bank-heist targets bank"
     )
     embed.set_footer(text=footer)
     return embed
@@ -100,8 +101,8 @@ class DepositModal(discord.ui.Modal, title="Deposit to bank"):
             return
         if room <= 0:
             await interaction.response.send_message(
-                f"Your bank is full. Buy a vault expansion with **/expand-bank** "
-                f"({fmt_amount(config.BANK_EXPANSION_TOKEN_COST)} each).",
+                "Your bank is full. Buy a vault expansion with **/expand-bank** "
+                "or use the **Vault expansions** button.",
                 ephemeral=True,
             )
             return
@@ -207,9 +208,7 @@ class WalletView(discord.ui.View):
                 )
             else:
                 await interaction.response.send_message(
-                    f"Bank is full. Use **/expand-bank** "
-                    f"({fmt_amount(config.BANK_EXPANSION_TOKEN_COST)} per "
-                    f"+{fmt_amount(config.BANK_EXPANSION_CAPACITY_PER_TOKEN)} cap).",
+                    "Bank is full. Use **/expand-bank** or the **Vault expansions** button.",
                     ephemeral=True,
                 )
             return
@@ -236,27 +235,12 @@ class WalletView(discord.ui.View):
         embed = await build_wallet_embed_for_user(self.cog, member, self.guild_id, self.user_id)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="Expand vault", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="Vault expansions", style=discord.ButtonStyle.success, row=1)
     async def expand_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
-        ok, reason = await self.cog.bot.db.expand_bank_capacity(self.user_id, self.guild_id)
-        if not ok:
-            if reason == "insufficient_wallet":
-                await interaction.response.send_message(
-                    f"You need **{fmt_amount(config.BANK_EXPANSION_TOKEN_COST)}** in your pocket.",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.response.send_message("Could not expand vault.", ephemeral=True)
-            return
-        member = interaction.user
-        assert isinstance(member, discord.Member)
-        capacity = await self.cog.bot.db.get_bank_capacity(self.user_id, self.guild_id)
-        embed = await build_wallet_embed_for_user(self.cog, member, self.guild_id, self.user_id)
-        embed.description = (
-            f"Vault expanded! New capacity: **{fmt_amount(capacity)}**."
-        )
-        await interaction.response.edit_message(embed=embed, view=self)
+        from utils.bank_expansion_ui import send_bank_expansion_panel
+
+        await send_bank_expansion_panel(interaction, self.cog)
 
     @discord.ui.button(label="Bodyguards", style=discord.ButtonStyle.secondary, row=1)
     async def bodyguards_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

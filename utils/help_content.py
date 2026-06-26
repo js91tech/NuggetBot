@@ -4,7 +4,7 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Economy",
         "**/daily** · **/balance** · **/deposit** · **/withdraw** · **/expand-bank** · **/pay** · **/leaderboard**\n"
-        "Bank cap **100k** base — buy vault expansions (**10k** each, **+10k** cap). Prestige **1–9** resets pocket only; **prestige 10** also wipes bank + expansions.\n"
+        "Bank cap **100k** base — tiered vault expansions: **+10k** (10k), **+50k** (50k), **+250k** (250k), **+500k** (500k). Prestige **1–9** resets pocket only; **prestige 10** also wipes bank + expansions.\n"
         "**/jobs** · **/work** · **/energy** · **/upgrade-energy**\n"
         "Bot Discord accounts can use slash commands and be targeted in PvP (duels, heists, bounties, etc.). Passive chat/VC farming stays human-only to prevent spam.",
     ),

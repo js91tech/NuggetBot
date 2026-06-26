@@ -59,13 +59,13 @@ python bot.py
 | `/guide` | Interactive popup guide — all systems, gear tiers, and items |
 | `/deposit amount` | Move nuggets pocket → bank (100k base cap; `/bank-heist` targets bank) |
 | `/withdraw amount` | Move nuggets bank → pocket |
-| `/expand-bank` | Buy a vault expansion token (**10k** from pocket, **+10k** bank capacity) |
+| `/expand-bank` | Buy a tiered vault expansion (T1 **+10k** / T2 **+50k** / T3 **+250k** / T4 **+500k** cap; cost matches gain) |
 | `/leaderboard` | Top 10 by net worth (pocket + bank) |
 | `/pay @user amount` | Send nuggets from your pocket to another user |
 
 **House pot** — gambling losses/taxes, scourge bank hits, and expired coin drops feed a guild pool that funds random **Claim** drops in the main channel (no minting when the pot is empty).
 
-**Bank vault** — personal bank holds up to **100k** nuggets by default. Each **/expand-bank** purchase costs **10k** from your pocket and adds **+10k** capacity. Prestiges **1–9** reset your pocket only; reaching **prestige 10** also resets your bank balance and vault expansions.
+**Bank vault** — personal bank holds up to **100k** nuggets by default. **/expand-bank** offers four expansion tiers: **+10k**, **+50k**, **+250k**, and **+500k** capacity (each tier costs the same amount as its cap gain). Use `/balance` → **Vault expansions** for the tier picker. Prestiges **1–9** reset your pocket only; reaching **prestige 10** also resets your bank balance and vault expansions.
 
 ### Bounty
 

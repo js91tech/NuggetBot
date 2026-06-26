@@ -32,10 +32,18 @@ ITEM_SET_MAP: dict[str, str] = {
     "mythic_aetherplate": "nugget",
     "apex_nuggetblade": "apex",
     "apex_aegis": "apex",
+    "apex_annihilator": "apex",
     "sovereign_cleaver": "sovereign",
     "sovereign_bastion": "sovereign",
+    "sovereign_railcannon": "sovereign",
     "transcendent_worldsplitter": "transcendent",
     "transcendent_carapace": "transcendent",
+    "transcendent_voidlance": "transcendent",
+    "dominion_worldbreaker": "dominion",
+    "dominion_devastator": "dominion",
+    "apotheosis_carapace": "dominion",
+    "reaper_fang": "reaper",
+    "reaper_crossbow": "reaper",
     "mythic_raid_blade": "mythic",
     "mythic_raid_mail": "mythic",
     "boss_slayer_blade": "slayer",
@@ -61,6 +69,8 @@ SET_DISPLAY_NAMES: dict[str, str] = {
     "apex": "Apex",
     "sovereign": "Sovereign",
     "transcendent": "Transcendent",
+    "dominion": "Dominion",
+    "reaper": "Reaper",
 }
 
 

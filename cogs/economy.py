@@ -314,8 +314,7 @@ class Economy(commands.Cog):
         if room <= 0:
             await interaction.response.send_message(
                 f"Your bank is full (**{fmt_amount(await self.bot.db.get_bank_capacity(interaction.user.id, interaction.guild_id))}** cap). "
-                f"Run **/expand-bank** ({fmt_amount(config.BANK_EXPANSION_TOKEN_COST)} per "
-                f"+{fmt_amount(config.BANK_EXPANSION_CAPACITY_PER_TOKEN)}).",
+                "Run **/expand-bank** to buy a tiered vault expansion.",
                 ephemeral=True,
             )
             return
@@ -340,27 +339,49 @@ class Economy(commands.Cog):
         name="expand-bank",
         description="Buy a vault expansion (+bank capacity) from your pocket.",
     )
+    @app_commands.describe(
+        tier="Expansion tier: 1 Standard (+10k), 2 Reinforced (+50k), 3 Fortified (+250k), 4 Sovereign (+500k)",
+    )
+    @app_commands.choices(
+        tier=[
+            app_commands.Choice(name="T1 Standard (+10k cap, 10k cost)", value=1),
+            app_commands.Choice(name="T2 Reinforced (+50k cap, 50k cost)", value=2),
+            app_commands.Choice(name="T3 Fortified (+250k cap, 250k cost)", value=3),
+            app_commands.Choice(name="T4 Sovereign (+500k cap, 500k cost)", value=4),
+        ],
+    )
     @app_commands.guild_only()
-    async def expand_bank(self, interaction: discord.Interaction) -> None:
+    async def expand_bank(
+        self,
+        interaction: discord.Interaction,
+        tier: app_commands.Choice[int] | None = None,
+    ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
+        tier_val = 1 if tier is None else int(tier.value)
+        spec = config.BANK_EXPANSION_TIERS.get(tier_val)
+        if spec is None:
+            await interaction.response.send_message("Invalid expansion tier.", ephemeral=True)
+            return
         ok, reason = await self.bot.db.expand_bank_capacity(
-            interaction.user.id, interaction.guild_id,
+            interaction.user.id, interaction.guild_id, tier_val,
         )
         if not ok:
             if reason == "insufficient_wallet":
                 await interaction.response.send_message(
-                    f"You need **{fmt_amount(config.BANK_EXPANSION_TOKEN_COST)}** in your pocket.",
+                    f"You need **{fmt_amount(float(spec['cost']))}** in your pocket.",
                     ephemeral=True,
                 )
             else:
                 await interaction.response.send_message("Could not expand vault.", ephemeral=True)
             return
         capacity = await self.bot.db.get_bank_capacity(interaction.user.id, interaction.guild_id)
-        expansions = await self.bot.db.get_bank_expansions(interaction.user.id, interaction.guild_id)
+        total = await self.bot.db.get_bank_expansion_total(interaction.user.id, interaction.guild_id)
         await interaction.response.send_message(
-            f"Vault expanded! **{expansions}** token(s) · capacity **{fmt_amount(capacity)}**.",
+            f"Purchased **1× {spec['name']}** (T{tier_val}) · "
+            f"+**{fmt_amount(float(spec['capacity']))}** cap · "
+            f"**{total}** token(s) total · capacity **{fmt_amount(capacity)}**.",
             ephemeral=True,
         )
 
