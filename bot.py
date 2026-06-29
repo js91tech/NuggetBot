@@ -12,7 +12,7 @@ import config
 from dashboard import DashboardServer
 from database import Database
 from launch_jobs import run_launch_grant
-from utils.discord_api import OutboundGate, safe_interaction_send
+from utils.discord_api import OutboundGate, run_with_discord_retry, safe_interaction_send
 
 COGS = (
     "cogs.economy",
@@ -71,22 +71,51 @@ class NuggetBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.db.connect()
-        logging.info("Database backend: %s", "postgres" if self.db.is_postgres else f"sqlite:{self.db.path}")
+        logging.info(
+            "Database backend: %s",
+            "postgres" if self.db.is_postgres else f"sqlite:{self.db.path}",
+        )
+
+        load_errors: list[str] = []
         for extension in COGS:
             try:
                 await self.load_extension(extension)
             except Exception:
                 logging.exception("Failed to load extension %s", extension)
+                load_errors.append(extension)
+        if load_errors:
+            msg = f"Failed to load {len(load_errors)} cog(s): {', '.join(load_errors)}"
+            raise RuntimeError(msg)
 
-        if config.GUILD_ID is not None:
-            guild = discord.Object(id=config.GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            logging.info("Synced slash commands to guild %s", config.GUILD_ID)
-        else:
-            await self.tree.sync()
-            logging.info("Synced global slash commands")
-        await self.dashboard.start()
+        await self._sync_commands()
+        await self._start_dashboard()
+
+    async def _sync_commands(self) -> None:
+        async def _do_sync() -> list[app_commands.AppCommand]:
+            if config.GUILD_ID is not None:
+                guild = discord.Object(id=config.GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                logging.info("Synced %s slash commands to guild %s", len(synced), config.GUILD_ID)
+                return synced
+            synced = await self.tree.sync()
+            logging.info("Synced %s global slash commands", len(synced))
+            return synced
+
+        synced = await run_with_discord_retry(_do_sync, gate=self.outbound_gate, max_attempts=5)
+        if synced is None:
+            msg = "Could not sync slash commands after rate-limit retries"
+            raise RuntimeError(msg)
+
+    async def _start_dashboard(self) -> None:
+        try:
+            await self.dashboard.start()
+        except OSError:
+            logging.exception(
+                "Dashboard server failed to bind on %s:%s; continuing without dashboard",
+                config.DASHBOARD_HOST,
+                config.DASHBOARD_PORT,
+            )
 
     async def close(self) -> None:
         await self.dashboard.close()

@@ -108,11 +108,24 @@ async def safe_interaction_send(
     try:
         await run_with_discord_retry(_send, gate=gate, max_attempts=4)
         return True
+    except discord.NotFound:
+        logging.warning(
+            "Could not respond to interaction %s (interaction expired or unknown)",
+            getattr(interaction.command, "name", "?"),
+        )
+        return False
     except discord.HTTPException as exc:
         if exc.status == 429:
             logging.warning(
                 "Could not respond to interaction %s (rate limited)",
                 getattr(interaction.command, "name", "?"),
+            )
+            return False
+        if exc.status in {400, 404}:
+            logging.warning(
+                "Could not respond to interaction %s (HTTP %s)",
+                getattr(interaction.command, "name", "?"),
+                exc.status,
             )
             return False
         raise

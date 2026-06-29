@@ -26,3 +26,6 @@ jobs:
 
       - name: Verify slash commands load
         run: python3 scripts/verify_commands.py
+
+      - name: Verify startup migrations and cogs
+        run: python3 scripts/verify_startup.py

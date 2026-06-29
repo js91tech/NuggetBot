@@ -507,6 +507,7 @@ class Database:
         await self._migrate_active_drug_buff()
         await self._migrate_drug_grow_fertilizer()
         await self._migrate_empire_expansion()
+        await self._migrate_drug_harvest_reputation()
         await self._migrate_tier1_retention()
 
     async def _migrate_tier1_retention(self) -> None:
@@ -9579,14 +9580,30 @@ class Database:
         )
 
     async def get_drug_stats(self, user_id: int, guild_id: int) -> dict[str, int]:
-        cursor = await self.conn.execute(
-            """
-            SELECT units_sold, units_harvested FROM user_drug_stats
-            WHERE user_id = ? AND guild_id = ?
-            """,
-            (user_id, guild_id),
-        )
-        row = await cursor.fetchone()
+        try:
+            cursor = await self.conn.execute(
+                """
+                SELECT units_sold, units_harvested FROM user_drug_stats
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+        except Exception:
+            logging.exception(
+                "get_drug_stats full query failed user=%s guild=%s; retrying legacy columns",
+                user_id,
+                guild_id,
+            )
+            await self._migrate_drug_harvest_reputation()
+            cursor = await self.conn.execute(
+                "SELECT units_sold FROM user_drug_stats WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return {"units_sold": 0, "units_harvested": 0}
+            return {"units_sold": int(row["units_sold"]), "units_harvested": 0}
         if row is None:
             return {"units_sold": 0, "units_harvested": 0}
         try:
