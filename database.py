@@ -480,6 +480,7 @@ class Database:
         await self._migrate_dlc_followup()
         await self._migrate_crew_banking()
         await self._migrate_crew_bank_raids()
+        await self._migrate_crew_raid_type_cooldowns()
         await self._migrate_territories()
         await self._migrate_territory_integration()
         await self._migrate_personal_bank()
@@ -1764,6 +1765,44 @@ class Database:
             )
             """,
         )
+        await self.conn.commit()
+
+    async def _migrate_crew_raid_type_cooldowns(self) -> None:
+        """Per-raid-type cooldown timestamps for drug and business raids."""
+        cols = (
+            "last_drug_attack_at",
+            "last_drug_defended_at",
+            "last_business_attack_at",
+            "last_business_defended_at",
+        )
+        if self.is_postgres:
+            for col in cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'crew_bank_raid_cooldowns' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"""
+                        ALTER TABLE crew_bank_raid_cooldowns
+                        ADD COLUMN {col} REAL NOT NULL DEFAULT 0
+                        """,
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(crew_bank_raid_cooldowns)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col in cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"""
+                        ALTER TABLE crew_bank_raid_cooldowns
+                        ADD COLUMN {col} REAL NOT NULL DEFAULT 0
+                        """,
+                    )
         await self.conn.commit()
 
     async def _migrate_dlc_followup(self) -> None:
@@ -8501,8 +8540,7 @@ class Database:
         return [
             (str(row["crew_name"]), int(row["member_count"]), int(row["stash_total"]))
             for row in rows
-            if int(row["member_count"]) >= config.CREW_BANK_RAID_MIN_MEMBERS
-            and int(row["stash_total"]) >= config.CREW_DRUG_RAID_MIN_STASH
+            if int(row["stash_total"]) >= config.CREW_DRUG_RAID_MIN_STASH
         ]
 
     async def list_raidable_business_crews(
@@ -8533,8 +8571,7 @@ class Database:
         return [
             (str(row["crew_name"]), int(row["member_count"]), float(row["stored_total"]))
             for row in rows
-            if int(row["member_count"]) >= config.CREW_BANK_RAID_MIN_MEMBERS
-            and float(row["stored_total"]) >= config.CREW_BUSINESS_RAID_MIN_STORED
+            if float(row["stored_total"]) >= config.CREW_BUSINESS_RAID_MIN_STORED
         ]
 
     async def get_crew_cartel_stash_total(self, guild_id: int, crew_name: str) -> int:
@@ -8567,7 +8604,10 @@ class Database:
     ) -> aiosqlite.Row | None:
         cursor = await self.conn.execute(
             """
-            SELECT last_attack_at, last_defended_at FROM crew_bank_raid_cooldowns
+            SELECT last_attack_at, last_defended_at,
+                   last_drug_attack_at, last_drug_defended_at,
+                   last_business_attack_at, last_business_defended_at
+            FROM crew_bank_raid_cooldowns
             WHERE guild_id = ? AND crew_name = ?
             """,
             (guild_id, crew_name),
@@ -8595,10 +8635,14 @@ class Database:
             return "invalid_defender"
         attacker_count = await self.count_crew_members(guild_id, attacker_crew)
         defender_count = await self.count_crew_members(guild_id, defender)
-        if attacker_count < config.CREW_BANK_RAID_MIN_MEMBERS:
-            return "attacker_too_small"
-        if defender_count < config.CREW_BANK_RAID_MIN_MEMBERS:
-            return "defender_too_small"
+        if raid_type in {"drugs", "business"}:
+            if attacker_count < config.CREW_DRUG_BUSINESS_RAID_MIN_MEMBERS:
+                return "attacker_too_small"
+        else:
+            if attacker_count < config.CREW_BANK_RAID_MIN_MEMBERS:
+                return "attacker_too_small"
+            if defender_count < config.CREW_BANK_RAID_MIN_MEMBERS:
+                return "defender_too_small"
 
         if raid_type == "bank":
             defender_stats = await self.get_crew_stats(guild_id, defender)
@@ -8629,14 +8673,33 @@ class Database:
 
         now = time.time()
         attacker_cd = await self._crew_bank_raid_cooldown_row(guild_id, attacker_crew)
-        if attacker_cd is not None:
-            elapsed = now - float(attacker_cd["last_attack_at"])
-            if elapsed < config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS:
-                return "attacker_cooldown"
         defender_cd = await self._crew_bank_raid_cooldown_row(guild_id, defender)
+        if raid_type == "drugs":
+            attack_cd_seconds = config.CREW_DRUG_RAID_COOLDOWN_SECONDS
+            attack_col = "last_drug_attack_at"
+            defend_col = "last_drug_defended_at"
+        elif raid_type == "business":
+            attack_cd_seconds = config.CREW_BUSINESS_RAID_COOLDOWN_SECONDS
+            attack_col = "last_business_attack_at"
+            defend_col = "last_business_defended_at"
+        else:
+            attack_cd_seconds = config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS
+            attack_col = "last_attack_at"
+            defend_col = "last_defended_at"
+        if attacker_cd is not None:
+            elapsed = now - float(attacker_cd[attack_col])
+            if elapsed < attack_cd_seconds:
+                return "attacker_cooldown"
         if defender_cd is not None:
-            elapsed = now - float(defender_cd["last_defended_at"])
-            if elapsed < config.CREW_BANK_RAID_DEFENSE_COOLDOWN_SECONDS:
+            elapsed = now - float(defender_cd[defend_col])
+            defend_cd_seconds = (
+                config.CREW_DRUG_RAID_COOLDOWN_SECONDS
+                if raid_type == "drugs"
+                else config.CREW_BUSINESS_RAID_COOLDOWN_SECONDS
+                if raid_type == "business"
+                else config.CREW_BANK_RAID_DEFENSE_COOLDOWN_SECONDS
+            )
+            if elapsed < defend_cd_seconds:
                 return "defender_cooldown"
         return None
 
@@ -8653,23 +8716,35 @@ class Database:
         )
 
     async def _record_crew_raid_cooldown_no_lock(
-        self, guild_id: int, attacker_crew: str, defender_crew: str, now: float,
+        self,
+        guild_id: int,
+        attacker_crew: str,
+        defender_crew: str,
+        now: float,
+        *,
+        raid_type: str,
     ) -> None:
+        if raid_type == "drugs":
+            attack_col, defend_col = "last_drug_attack_at", "last_drug_defended_at"
+        elif raid_type == "business":
+            attack_col, defend_col = "last_business_attack_at", "last_business_defended_at"
+        else:
+            attack_col, defend_col = "last_attack_at", "last_defended_at"
         await self.conn.execute(
-            """
-            INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
-            VALUES (?, ?, ?, 0)
+            f"""
+            INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, {attack_col})
+            VALUES (?, ?, ?)
             ON CONFLICT(guild_id, crew_name) DO UPDATE SET
-                last_attack_at = excluded.last_attack_at
+                {attack_col} = excluded.{attack_col}
             """,
             (guild_id, attacker_crew, now),
         )
         await self.conn.execute(
-            """
-            INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
-            VALUES (?, ?, 0, ?)
+            f"""
+            INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, {defend_col})
+            VALUES (?, ?, ?)
             ON CONFLICT(guild_id, crew_name) DO UPDATE SET
-                last_defended_at = excluded.last_defended_at
+                {defend_col} = excluded.{defend_col}
             """,
             (guild_id, defender_crew, now),
         )
@@ -8726,7 +8801,9 @@ class Database:
                 )
                 await self._recalc_crew_level_no_lock(guild_id, attacker_crew)
 
-            await self._record_crew_raid_cooldown_no_lock(guild_id, attacker_crew, defender, now)
+            await self._record_crew_raid_cooldown_no_lock(
+                guild_id, attacker_crew, defender, now, raid_type="bank",
+            )
             await self.conn.commit()
         return {
             "error": None,
@@ -8793,7 +8870,9 @@ class Database:
                 )
                 stash_after = available - transferred
 
-            await self._record_crew_raid_cooldown_no_lock(guild_id, attacker_crew, defender, now)
+            await self._record_crew_raid_cooldown_no_lock(
+                guild_id, attacker_crew, defender, now, raid_type="drugs",
+            )
             await self.conn.commit()
         return {
             "error": None,
@@ -8869,7 +8948,9 @@ class Database:
                     )
                     await self._recalc_crew_level_no_lock(guild_id, attacker_crew)
 
-            await self._record_crew_raid_cooldown_no_lock(guild_id, attacker_crew, defender, now)
+            await self._record_crew_raid_cooldown_no_lock(
+                guild_id, attacker_crew, defender, now, raid_type="business",
+            )
             await self.conn.commit()
         return {
             "error": None,

@@ -71,6 +71,33 @@ class CrewDrugRaidDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(growers_stash.get("blue_dream", 0), 6)
         self.assertEqual(raiders_stash.get("blue_dream", 0), 4)
 
+    async def test_drug_raid_allows_small_defender_crew(self) -> None:
+        guild_id = 1
+        await self._seed_crew(guild_id, "Raiders", [100, 101, 102])
+        await self._seed_crew(guild_id, "TinyGrow", [200, 201])
+        async with self.db._write_lock:
+            await self.db.conn.execute(
+                """
+                INSERT INTO crew_cartel_stash (guild_id, crew_name, drug_id, quantity)
+                VALUES (?, ?, ?, ?)
+                """,
+                (guild_id, "TinyGrow", "blue_dream", 10),
+            )
+            await self.db.conn.commit()
+        err = await self.db.validate_crew_raid(
+            guild_id, 100, "Raiders", "TinyGrow", (101, 102), raid_type="drugs",
+        )
+        self.assertIsNone(err)
+
+    async def test_drug_raid_requires_three_attackers(self) -> None:
+        guild_id = 1
+        await self._seed_crew(guild_id, "Small", [100, 101])
+        await self._seed_crew(guild_id, "Target", [200, 201, 202, 203, 204])
+        err = await self.db.validate_crew_raid(
+            guild_id, 100, "Small", "Target", (101, 100), raid_type="drugs",
+        )
+        self.assertEqual(err, "attacker_too_small")
+
     async def test_settle_business_raid_steals_ten_percent(self) -> None:
         guild_id = 1
         attackers = list(range(100, 105))

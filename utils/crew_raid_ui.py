@@ -64,18 +64,49 @@ RAID_META: dict[RaidKind, dict[str, str]] = {
 COMMON_ERROR_MESSAGES = {
     "same_crew": "You cannot raid your own crew.",
     "invalid_defender": "That crew does not exist.",
-    "attacker_too_small": (
-        f"Your crew needs at least **{config.CREW_BANK_RAID_MIN_MEMBERS}** members to launch a raid."
-    ),
-    "defender_too_small": (
-        f"The target crew needs at least **{config.CREW_BANK_RAID_MIN_MEMBERS}** members to be raided."
-    ),
     "duplicate_fighters": "Pick two different backup members — you cannot reuse the same fighter.",
     "fighter_not_in_crew": "Every raider must be a member of your crew.",
     "fighter_restricted": "One of your raiders is arrested or downed and cannot fight.",
     "attacker_cooldown": "Your crew raided recently. Wait for the attack cooldown to expire.",
     "defender_cooldown": "That crew was raided recently and is still on defense cooldown.",
 }
+
+KIND_ERROR_MESSAGES: dict[RaidKind, dict[str, str]] = {
+    RaidKind.BANK: {
+        "attacker_too_small": (
+            f"Your crew needs at least **{config.CREW_BANK_RAID_MIN_MEMBERS}** members to launch a raid."
+        ),
+        "defender_too_small": (
+            f"The target crew needs at least **{config.CREW_BANK_RAID_MIN_MEMBERS}** members to be raided."
+        ),
+    },
+    RaidKind.DRUGS: {
+        "attacker_too_small": (
+            f"Your crew needs at least **{config.CREW_DRUG_BUSINESS_RAID_MIN_MEMBERS}** members "
+            f"(you + two backups) to launch a drug raid."
+        ),
+    },
+    RaidKind.BUSINESS: {
+        "attacker_too_small": (
+            f"Your crew needs at least **{config.CREW_DRUG_BUSINESS_RAID_MIN_MEMBERS}** members "
+            f"(you + two backups) to launch a business raid."
+        ),
+    },
+}
+
+
+def _raid_requirements_text(kind: RaidKind) -> str:
+    if kind is RaidKind.BANK:
+        return (
+            f"Both crews need **{config.CREW_BANK_RAID_MIN_MEMBERS}+** members.\n"
+            f"Attack cooldown: **{config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS // 3600}h**"
+        )
+    cooldown_h = config.CREW_DRUG_RAID_COOLDOWN_SECONDS // 3600
+    return (
+        f"Your crew needs **{config.CREW_DRUG_BUSINESS_RAID_MIN_MEMBERS}+** members "
+        f"(you + two backups). Targets can have **any crew size**.\n"
+        f"Raid cooldown: **{cooldown_h}h** (attack and defense)"
+    )
 
 
 def error_message(kind: RaidKind, code: str) -> str:
@@ -84,6 +115,9 @@ def error_message(kind: RaidKind, code: str) -> str:
         return meta["target_low_msg"]
     if code == "not_in_crew":
         return meta["not_in_crew"]
+    kind_msg = KIND_ERROR_MESSAGES.get(kind, {}).get(code)
+    if kind_msg:
+        return kind_msg
     return COMMON_ERROR_MESSAGES.get(code, code)
 
 
@@ -237,10 +271,7 @@ async def build_raid_setup_embed(
     embed.add_field(name=loot_field, value=potential_loot, inline=True)
     embed.add_field(
         name="Requirements",
-        value=(
-            f"Both crews need **{config.CREW_BANK_RAID_MIN_MEMBERS}+** members.\n"
-            f"Attack cooldown: **{config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS // 3600}h**"
-        ),
+        value=_raid_requirements_text(kind),
         inline=False,
     )
     embed.set_footer(text="Launch when both backups are selected.")
