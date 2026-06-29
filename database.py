@@ -1241,7 +1241,7 @@ class Database:
             SELECT user_id, guild_id, COALESCE(SUM(quantity), 0) AS stash
             FROM drug_inventory
             GROUP BY user_id, guild_id
-            HAVING stash > 0
+            HAVING COALESCE(SUM(quantity), 0) > 0
             """,
         )
         for row in await cursor.fetchall():
