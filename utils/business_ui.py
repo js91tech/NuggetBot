@@ -344,8 +344,9 @@ def build_prestige_embed(row: object) -> discord.Embed:
     embed = discord.Embed(
         title="⭐ Business Prestige",
         description=(
-            "Prestiging resets your **Corporation back to a Lemon Stand** and clears "
-            "stored revenue, but grants a **permanent** business income bonus.\n\n"
+            "Prestiging resets your **Corporation back to a Lemon Stand**, clears "
+            "stored revenue, and **resets all business upgrades** (security, reputation, "
+            "efficiency, branches, etc.), but grants a **permanent** business income bonus.\n\n"
             f"Current prestige: **{prestige}** / {config.BUSINESS_PRESTIGE_MAX_LEVEL}\n"
             f"After prestige: **+{next_bonus}%** total permanent business income"
         ),

@@ -1165,6 +1165,117 @@ class Database:
         )
         await self.conn.commit()
 
+    async def _migrate_drug_harvest_reputation(self) -> None:
+        """Add units_harvested and backfill cultivation rep from stash + sales."""
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'user_drug_stats' AND column_name = 'units_harvested'
+                """,
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(
+                    """
+                    ALTER TABLE user_drug_stats
+                    ADD COLUMN units_harvested INTEGER NOT NULL DEFAULT 0
+                    CHECK (units_harvested >= 0)
+                    """,
+                )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(user_drug_stats)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if "units_harvested" not in existing:
+                await self.conn.execute(
+                    """
+                    ALTER TABLE user_drug_stats
+                    ADD COLUMN units_harvested INTEGER NOT NULL DEFAULT 0
+                    CHECK (units_harvested >= 0)
+                    """,
+                )
+        await self.conn.commit()
+        if await self.is_one_time_job_complete("drug_harvest_rep_v1"):
+            return
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, guild_id, COALESCE(units_sold, 0) AS units_sold
+            FROM user_drug_stats
+            """,
+        )
+        stat_rows = await cursor.fetchall()
+        for row in stat_rows:
+            inv_cursor = await self.conn.execute(
+                """
+                SELECT COALESCE(SUM(quantity), 0) AS stash
+                FROM drug_inventory
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (row["user_id"], row["guild_id"]),
+            )
+            inv_row = await inv_cursor.fetchone()
+            stash = int(inv_row["stash"]) if inv_row is not None else 0
+            cultivated = int(row["units_sold"]) + stash
+            stat_cursor = await self.conn.execute(
+                """
+                SELECT units_harvested FROM user_drug_stats
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (row["user_id"], row["guild_id"]),
+            )
+            stat_row = await stat_cursor.fetchone()
+            current = int(stat_row["units_harvested"]) if stat_row is not None else 0
+            if cultivated > current:
+                await self.conn.execute(
+                    """
+                    UPDATE user_drug_stats
+                    SET units_harvested = ?
+                    WHERE user_id = ? AND guild_id = ?
+                    """,
+                    (cultivated, row["user_id"], row["guild_id"]),
+                )
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, guild_id, COALESCE(SUM(quantity), 0) AS stash
+            FROM drug_inventory
+            GROUP BY user_id, guild_id
+            HAVING stash > 0
+            """,
+        )
+        for row in await cursor.fetchall():
+            await self._ensure_user_no_lock(int(row["user_id"]), int(row["guild_id"]))
+            stash = int(row["stash"])
+            stat_cursor = await self.conn.execute(
+                """
+                SELECT units_sold, units_harvested FROM user_drug_stats
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (row["user_id"], row["guild_id"]),
+            )
+            stat_row = await stat_cursor.fetchone()
+            if stat_row is None:
+                await self.conn.execute(
+                    """
+                    INSERT INTO user_drug_stats (user_id, guild_id, units_sold, units_harvested)
+                    VALUES (?, ?, 0, ?)
+                    """,
+                    (row["user_id"], row["guild_id"], stash),
+                )
+            else:
+                cultivated = int(stat_row["units_sold"]) + stash
+                current = int(stat_row["units_harvested"])
+                if cultivated > current:
+                    await self.conn.execute(
+                        """
+                        UPDATE user_drug_stats
+                        SET units_harvested = ?
+                        WHERE user_id = ? AND guild_id = ?
+                        """,
+                        (cultivated, row["user_id"], row["guild_id"]),
+                    )
+        await self.conn.commit()
+        await self.mark_one_time_job_complete("drug_harvest_rep_v1")
+
     async def _migrate_business_empire(self) -> None:
         await self.conn.execute(
             """
@@ -1544,10 +1655,13 @@ class Database:
                 user_id BIGINT NOT NULL,
                 guild_id BIGINT NOT NULL,
                 units_sold INTEGER NOT NULL DEFAULT 0 CHECK (units_sold >= 0),
+                units_harvested INTEGER NOT NULL DEFAULT 0 CHECK (units_harvested >= 0),
                 PRIMARY KEY (user_id, guild_id)
             )
             """,
         )
+        await self.conn.commit()
+        await self._migrate_drug_harvest_reputation()
         await self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS user_empire_acquisitions (
@@ -7267,9 +7381,14 @@ class Database:
     ) -> list[aiosqlite.Row]:
         cursor = await self.conn.execute(
             """
-            SELECT user_id, units_sold AS score
+            SELECT user_id,
+                   CASE
+                       WHEN units_harvested > units_sold THEN units_harvested
+                       ELSE units_sold
+                   END AS score
             FROM user_drug_stats
-            WHERE guild_id = ? AND units_sold > 0
+            WHERE guild_id = ?
+              AND (units_sold > 0 OR units_harvested > 0)
             ORDER BY score DESC, user_id ASC
             LIMIT ?
             """,
@@ -9380,11 +9499,36 @@ class Database:
 
     async def get_drug_stats(self, user_id: int, guild_id: int) -> dict[str, int]:
         cursor = await self.conn.execute(
-            "SELECT units_sold FROM user_drug_stats WHERE user_id = ? AND guild_id = ?",
+            """
+            SELECT units_sold, units_harvested FROM user_drug_stats
+            WHERE user_id = ? AND guild_id = ?
+            """,
             (user_id, guild_id),
         )
         row = await cursor.fetchone()
-        return {"units_sold": int(row["units_sold"]) if row else 0}
+        if row is None:
+            return {"units_sold": 0, "units_harvested": 0}
+        return {
+            "units_sold": int(row["units_sold"]),
+            "units_harvested": int(row["units_harvested"]),
+        }
+
+    async def _increment_drug_units_harvested_no_lock(
+        self, user_id: int, guild_id: int, quantity: int,
+    ) -> None:
+        qty = max(0, int(quantity))
+        if qty <= 0:
+            return
+        await self._ensure_user_no_lock(user_id, guild_id)
+        await self.conn.execute(
+            """
+            INSERT INTO user_drug_stats (user_id, guild_id, units_sold, units_harvested)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(user_id, guild_id) DO UPDATE SET
+                units_harvested = user_drug_stats.units_harvested + excluded.units_harvested
+            """,
+            (user_id, guild_id, qty),
+        )
 
     async def _increment_drug_units_sold_no_lock(
         self, user_id: int, guild_id: int, quantity: int,
@@ -9395,8 +9539,8 @@ class Database:
         await self._ensure_user_no_lock(user_id, guild_id)
         await self.conn.execute(
             """
-            INSERT INTO user_drug_stats (user_id, guild_id, units_sold)
-            VALUES (?, ?, ?)
+            INSERT INTO user_drug_stats (user_id, guild_id, units_sold, units_harvested)
+            VALUES (?, ?, ?, 0)
             ON CONFLICT(user_id, guild_id) DO UPDATE SET
                 units_sold = user_drug_stats.units_sold + excluded.units_sold
             """,
@@ -9582,7 +9726,10 @@ class Database:
         from utils.dealer_ranks import dealer_rank, lab_slot_count
         from utils.legacy_perks import extra_lab_slots_from_perks
 
-        rank = dealer_rank(stats["units_sold"])
+        rank = dealer_rank(
+            units_sold=stats["units_sold"],
+            units_harvested=stats["units_harvested"],
+        )
         legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
         max_slots = lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
         cursor = await self.conn.execute(
@@ -9639,8 +9786,18 @@ class Database:
             await self.conn.execute(
                 """
                 UPDATE user_businesses
-                SET tier = 1, tier_id = ?, stored_income = 0,
-                    business_prestige = ?
+                SET tier = 1,
+                    tier_id = ?,
+                    stored_income = 0,
+                    business_prestige = ?,
+                    security = 0,
+                    reputation = 0,
+                    efficiency = 0,
+                    capacity = 0,
+                    employee_satisfaction = 50,
+                    branch_security = 0,
+                    branch_growth = 0,
+                    branch_production = 0
                 WHERE user_id = ? AND guild_id = ?
                 """,
                 (tier1.tier_id if tier1 else "lemon_stand", new_prestige, user_id, guild_id),
@@ -9824,7 +9981,10 @@ class Database:
             from utils.dealer_ranks import dealer_rank, lab_slot_count
             from utils.legacy_perks import extra_lab_slots_from_perks
 
-            rank = dealer_rank(stats["units_sold"])
+            rank = dealer_rank(
+            units_sold=stats["units_sold"],
+            units_harvested=stats["units_harvested"],
+        )
             legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
             max_slots = lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
             if row is not None and int(row["c"]) >= max_slots:
@@ -9971,6 +10131,7 @@ class Database:
                 )
                 await self.conn.execute("DELETE FROM drug_grows WHERE grow_id = ?", (grow_id,))
                 harvested[drug_id] = harvested.get(drug_id, 0) + amount
+                await self._increment_drug_units_harvested_no_lock(user_id, guild_id, amount)
             await self.conn.commit()
         return harvested
 
@@ -10054,7 +10215,10 @@ class Database:
         if quantity <= 0:
             return {"error": "invalid_amount"}
         stats = await self.get_drug_stats(user_id, guild_id)
-        rank = dealer_rank(stats["units_sold"])
+        rank = dealer_rank(
+            units_sold=stats["units_sold"],
+            units_harvested=stats["units_harvested"],
+        )
         if not can_wholesale(rank):
             return {"error": "rank_locked", "required_rank": config.DEALER_RANK_WHOLESALE_UNLOCK}
         canonical_id = defn.drug_id
@@ -10097,7 +10261,12 @@ class Database:
         from utils.dealer_ranks import can_list_on_market, dealer_rank
 
         stats = await self.get_drug_stats(user_id, guild_id)
-        if not can_list_on_market(dealer_rank(stats["units_sold"])):
+        if not can_list_on_market(
+            dealer_rank(
+                units_sold=stats["units_sold"],
+                units_harvested=stats["units_harvested"],
+            ),
+        ):
             return "rank_locked"
         canonical_id = defn.drug_id
         async with self._write_lock:
@@ -10401,7 +10570,9 @@ class Database:
             await self.conn.commit()
         return defn.seed_cost, None
 
-    async def harvest_cartel(self, guild_id: int, crew_name: str) -> dict[str, int]:
+    async def harvest_cartel(
+        self, guild_id: int, crew_name: str, *, harvester_user_id: int | None = None,
+    ) -> dict[str, int]:
         from utils.drugs import drug_by_id, roll_yield
 
         now = time.time()
@@ -10435,6 +10606,10 @@ class Database:
                 )
                 await self.conn.execute("DELETE FROM crew_cartel_grows WHERE grow_id = ?", (grow_id,))
                 harvested[drug_id] = harvested.get(drug_id, 0) + amount
+                if harvester_user_id is not None:
+                    await self._increment_drug_units_harvested_no_lock(
+                        harvester_user_id, guild_id, amount,
+                    )
             await self.conn.commit()
         return harvested
 

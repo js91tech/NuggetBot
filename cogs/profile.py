@@ -45,6 +45,13 @@ class Profile(commands.Cog):
             )
         avatar_id = await self.bot.db.get_equipped_avatar_id(uid, guild_id)
         class_id = await self.bot.db.get_class_id(uid, guild_id)
+        drug_stats = await self.bot.db.get_drug_stats(uid, guild_id)
+        from utils.dealer_ranks import dealer_rank, rank_title
+
+        dealer_rank_val = dealer_rank(
+            units_sold=drug_stats["units_sold"],
+            units_harvested=drug_stats["units_harvested"],
+        )
         snap = await self.bot.db.get_mana_snapshot(uid, guild_id)
         jackpot = await self.bot.db.get_jackpot_pool(guild_id)
 
@@ -97,6 +104,18 @@ class Profile(commands.Cog):
         class_text = class_id or "_No class — /class-choose_"
         embed.add_field(name="Class", value=f"`{class_text}`", inline=True)
         embed.add_field(name="Avatar", value=f"`{avatar_id}`", inline=True)
+        if dealer_rank_val >= config.DEALER_RANK_CARTEL_TITLE:
+            embed.add_field(
+                name="Dealer title",
+                value=f"**{rank_title(dealer_rank_val)}**",
+                inline=True,
+            )
+        elif dealer_rank_val > 1:
+            embed.add_field(
+                name="Dealer rank",
+                value=f"**{rank_title(dealer_rank_val)}** (rank {dealer_rank_val})",
+                inline=True,
+            )
         crew_value = crew or "_None — /crew join_"
         if crew_loan is not None and float(crew_loan["remaining"]) > 0:
             crew_value += (
