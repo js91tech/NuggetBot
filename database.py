@@ -8357,6 +8357,92 @@ class Database:
             if int(row["member_count"]) >= config.CREW_BANK_RAID_MIN_MEMBERS
         ]
 
+    async def list_raidable_drug_crews(
+        self, guild_id: int, attacker_crew: str,
+    ) -> list[tuple[str, int, int]]:
+        """Crews with enough cartel stash to raid."""
+        import config
+
+        cursor = await self.conn.execute(
+            """
+            SELECT cs.crew_name,
+                   (SELECT COUNT(*) FROM crew_members cm
+                    WHERE cm.guild_id = cs.guild_id AND cm.crew_name = cs.crew_name) AS member_count,
+                   COALESCE((
+                       SELECT SUM(st.quantity) FROM crew_cartel_stash st
+                       WHERE st.guild_id = cs.guild_id AND st.crew_name = cs.crew_name
+                   ), 0) AS stash_total
+            FROM crew_stats cs
+            WHERE cs.guild_id = ? AND cs.crew_name != ?
+            ORDER BY stash_total DESC, cs.crew_name ASC
+            """,
+            (guild_id, attacker_crew),
+        )
+        rows = await cursor.fetchall()
+        return [
+            (str(row["crew_name"]), int(row["member_count"]), int(row["stash_total"]))
+            for row in rows
+            if int(row["member_count"]) >= config.CREW_BANK_RAID_MIN_MEMBERS
+            and int(row["stash_total"]) >= config.CREW_DRUG_RAID_MIN_STASH
+        ]
+
+    async def list_raidable_business_crews(
+        self, guild_id: int, attacker_crew: str,
+    ) -> list[tuple[str, int, float]]:
+        """Crews with enough uncollected business income to raid."""
+        import config
+
+        cursor = await self.conn.execute(
+            """
+            SELECT cs.crew_name,
+                   (SELECT COUNT(*) FROM crew_members cm
+                    WHERE cm.guild_id = cs.guild_id AND cm.crew_name = cs.crew_name) AS member_count,
+                   COALESCE((
+                       SELECT SUM(ub.stored_income)
+                       FROM crew_members cm2
+                       JOIN user_businesses ub
+                         ON ub.user_id = cm2.user_id AND ub.guild_id = cm2.guild_id
+                       WHERE cm2.guild_id = cs.guild_id AND cm2.crew_name = cs.crew_name
+                   ), 0) AS stored_total
+            FROM crew_stats cs
+            WHERE cs.guild_id = ? AND cs.crew_name != ?
+            ORDER BY stored_total DESC, cs.crew_name ASC
+            """,
+            (guild_id, attacker_crew),
+        )
+        rows = await cursor.fetchall()
+        return [
+            (str(row["crew_name"]), int(row["member_count"]), float(row["stored_total"]))
+            for row in rows
+            if int(row["member_count"]) >= config.CREW_BANK_RAID_MIN_MEMBERS
+            and float(row["stored_total"]) >= config.CREW_BUSINESS_RAID_MIN_STORED
+        ]
+
+    async def get_crew_cartel_stash_total(self, guild_id: int, crew_name: str) -> int:
+        cursor = await self.conn.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0) AS total FROM crew_cartel_stash
+            WHERE guild_id = ? AND crew_name = ?
+            """,
+            (guild_id, crew_name),
+        )
+        row = await cursor.fetchone()
+        return int(row["total"]) if row is not None else 0
+
+    async def get_crew_business_stored_total(self, guild_id: int, crew_name: str) -> float:
+        cursor = await self.conn.execute(
+            """
+            SELECT COALESCE(SUM(ub.stored_income), 0) AS total
+            FROM crew_members cm
+            JOIN user_businesses ub
+              ON ub.user_id = cm.user_id AND ub.guild_id = cm.guild_id
+            WHERE cm.guild_id = ? AND cm.crew_name = ?
+            """,
+            (guild_id, crew_name),
+        )
+        row = await cursor.fetchone()
+        return float(row["total"]) if row is not None else 0.0
+
     async def _crew_bank_raid_cooldown_row(
         self, guild_id: int, crew_name: str,
     ) -> aiosqlite.Row | None:
@@ -8369,13 +8455,15 @@ class Database:
         )
         return await cursor.fetchone()
 
-    async def validate_crew_bank_raid(
+    async def validate_crew_raid(
         self,
         guild_id: int,
         attacker_id: int,
         attacker_crew: str,
         defender_crew: str,
         backup_ids: tuple[int, int],
+        *,
+        raid_type: str,
     ) -> str | None:
         """Return an error code or None if the raid may proceed."""
         import config
@@ -8392,10 +8480,22 @@ class Database:
             return "attacker_too_small"
         if defender_count < config.CREW_BANK_RAID_MIN_MEMBERS:
             return "defender_too_small"
-        defender_stats = await self.get_crew_stats(guild_id, defender)
-        treasury = float(defender_stats["treasury"]) if defender_stats is not None else 0.0
-        if treasury < config.CREW_BANK_RAID_MIN_TREASURY:
-            return "defender_treasury_low"
+
+        if raid_type == "bank":
+            defender_stats = await self.get_crew_stats(guild_id, defender)
+            treasury = float(defender_stats["treasury"]) if defender_stats is not None else 0.0
+            if treasury < config.CREW_BANK_RAID_MIN_TREASURY:
+                return "defender_treasury_low"
+        elif raid_type == "drugs":
+            stash_total = await self.get_crew_cartel_stash_total(guild_id, defender)
+            if stash_total < config.CREW_DRUG_RAID_MIN_STASH:
+                return "defender_stash_low"
+        elif raid_type == "business":
+            stored_total = await self.get_crew_business_stored_total(guild_id, defender)
+            if stored_total < config.CREW_BUSINESS_RAID_MIN_STORED:
+                return "defender_stored_low"
+        else:
+            return "invalid_raid_type"
 
         lineup = (attacker_id, backup_ids[0], backup_ids[1])
         if len(set(lineup)) != len(lineup):
@@ -8420,6 +8520,40 @@ class Database:
             if elapsed < config.CREW_BANK_RAID_DEFENSE_COOLDOWN_SECONDS:
                 return "defender_cooldown"
         return None
+
+    async def validate_crew_bank_raid(
+        self,
+        guild_id: int,
+        attacker_id: int,
+        attacker_crew: str,
+        defender_crew: str,
+        backup_ids: tuple[int, int],
+    ) -> str | None:
+        return await self.validate_crew_raid(
+            guild_id, attacker_id, attacker_crew, defender_crew, backup_ids, raid_type="bank",
+        )
+
+    async def _record_crew_raid_cooldown_no_lock(
+        self, guild_id: int, attacker_crew: str, defender_crew: str, now: float,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
+            VALUES (?, ?, ?, 0)
+            ON CONFLICT(guild_id, crew_name) DO UPDATE SET
+                last_attack_at = excluded.last_attack_at
+            """,
+            (guild_id, attacker_crew, now),
+        )
+        await self.conn.execute(
+            """
+            INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(guild_id, crew_name) DO UPDATE SET
+                last_defended_at = excluded.last_defended_at
+            """,
+            (guild_id, defender_crew, now),
+        )
 
     async def settle_crew_bank_raid(
         self,
@@ -8473,30 +8607,156 @@ class Database:
                 )
                 await self._recalc_crew_level_no_lock(guild_id, attacker_crew)
 
-            await self.conn.execute(
-                """
-                INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
-                VALUES (?, ?, ?, 0)
-                ON CONFLICT(guild_id, crew_name) DO UPDATE SET
-                    last_attack_at = excluded.last_attack_at
-                """,
-                (guild_id, attacker_crew, now),
-            )
-            await self.conn.execute(
-                """
-                INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
-                VALUES (?, ?, 0, ?)
-                ON CONFLICT(guild_id, crew_name) DO UPDATE SET
-                    last_defended_at = excluded.last_defended_at
-                """,
-                (guild_id, defender, now),
-            )
+            await self._record_crew_raid_cooldown_no_lock(guild_id, attacker_crew, defender, now)
             await self.conn.commit()
         return {
             "error": None,
             "loot": loot,
             "treasury_before": treasury_before,
             "treasury_after": treasury_after,
+            "attacker_won": attacker_won,
+        }
+
+    async def settle_crew_drug_raid(
+        self,
+        guild_id: int,
+        attacker_crew: str,
+        defender_crew: str,
+        *,
+        attacker_won: bool,
+        loot_qty: int,
+        drug_id: str,
+    ) -> dict[str, object]:
+        """Transfer cartel stash drugs on success and record raid cooldowns."""
+        import config
+        import time
+
+        defender = await self.resolve_crew_name(guild_id, defender_crew)
+        if defender is None:
+            return {"error": "invalid_defender"}
+        now = time.time()
+        transferred = 0
+        stash_after = 0
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT quantity FROM crew_cartel_stash
+                WHERE guild_id = ? AND crew_name = ? AND drug_id = ?
+                """,
+                (guild_id, defender, drug_id),
+            )
+            row = await cursor.fetchone()
+            available = int(row["quantity"]) if row is not None else 0
+            if available < config.CREW_DRUG_RAID_MIN_STASH:
+                await self.conn.commit()
+                return {"error": "defender_stash_low"}
+
+            if attacker_won:
+                transferred = min(loot_qty, available)
+                if transferred <= 0:
+                    await self.conn.commit()
+                    return {"error": "defender_stash_low"}
+                await self.conn.execute(
+                    """
+                    UPDATE crew_cartel_stash SET quantity = quantity - ?
+                    WHERE guild_id = ? AND crew_name = ? AND drug_id = ?
+                    """,
+                    (transferred, guild_id, defender, drug_id),
+                )
+                await self.conn.execute(
+                    """
+                    INSERT INTO crew_cartel_stash (guild_id, crew_name, drug_id, quantity)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(guild_id, crew_name, drug_id) DO UPDATE SET
+                        quantity = crew_cartel_stash.quantity + excluded.quantity
+                    """,
+                    (guild_id, attacker_crew, drug_id, transferred),
+                )
+                stash_after = available - transferred
+
+            await self._record_crew_raid_cooldown_no_lock(guild_id, attacker_crew, defender, now)
+            await self.conn.commit()
+        return {
+            "error": None,
+            "loot_qty": transferred,
+            "drug_id": drug_id,
+            "stash_after": stash_after if attacker_won else available,
+            "attacker_won": attacker_won,
+        }
+
+    async def settle_crew_business_raid(
+        self,
+        guild_id: int,
+        attacker_crew: str,
+        defender_crew: str,
+        *,
+        attacker_won: bool,
+    ) -> dict[str, float | str | bool | None]:
+        """Steal uncollected business income on success and record raid cooldowns."""
+        import config
+        import time
+
+        defender = await self.resolve_crew_name(guild_id, defender_crew)
+        if defender is None:
+            return {"error": "invalid_defender"}
+        now = time.time()
+        async with self._write_lock:
+            stored_before = await self.get_crew_business_stored_total(guild_id, defender)
+            if stored_before < config.CREW_BUSINESS_RAID_MIN_STORED:
+                await self.conn.commit()
+                return {"error": "defender_stored_low"}
+
+            loot = 0.0
+            stored_after = stored_before
+            if attacker_won:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT ub.user_id, ub.stored_income
+                    FROM crew_members cm
+                    JOIN user_businesses ub
+                      ON ub.user_id = cm.user_id AND ub.guild_id = cm.guild_id
+                    WHERE cm.guild_id = ? AND cm.crew_name = ? AND ub.stored_income > 0
+                    """,
+                    (guild_id, defender),
+                )
+                rows = await cursor.fetchall()
+                for row in rows:
+                    stored = float(row["stored_income"])
+                    steal = round(stored * config.CREW_BUSINESS_RAID_LOOT_FRACTION, 2)
+                    if steal <= 0:
+                        continue
+                    steal = min(steal, stored)
+                    await self.conn.execute(
+                        """
+                        UPDATE user_businesses SET stored_income = stored_income - ?
+                        WHERE user_id = ? AND guild_id = ?
+                        """,
+                        (steal, int(row["user_id"]), guild_id),
+                    )
+                    loot += steal
+                loot = round(loot, 2)
+                stored_after = round(stored_before - loot, 2)
+                if loot > 0:
+                    xp_gain = int(loot // 100)
+                    await self.conn.execute(
+                        """
+                        INSERT INTO crew_stats (guild_id, crew_name, treasury, level, xp)
+                        VALUES (?, ?, ?, 1, ?)
+                        ON CONFLICT(guild_id, crew_name) DO UPDATE SET
+                            treasury = crew_stats.treasury + excluded.treasury,
+                            xp = crew_stats.xp + excluded.xp
+                        """,
+                        (guild_id, attacker_crew, loot, xp_gain),
+                    )
+                    await self._recalc_crew_level_no_lock(guild_id, attacker_crew)
+
+            await self._record_crew_raid_cooldown_no_lock(guild_id, attacker_crew, defender, now)
+            await self.conn.commit()
+        return {
+            "error": None,
+            "loot": loot,
+            "stored_before": stored_before,
+            "stored_after": stored_after,
             "attacker_won": attacker_won,
         }
 

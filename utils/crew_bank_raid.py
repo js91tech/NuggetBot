@@ -183,3 +183,75 @@ def format_raid_embed(
         bout_text = bout_text[:3897] + "..."
     embed.add_field(name="Battle log", value=bout_text or "_No fights recorded_", inline=False)
     return embed
+
+
+# Back-compat alias — all crew raid types use the same duel chain.
+simulate_crew_raid = simulate_crew_bank_raid
+
+
+def format_drug_raid_embed(
+    *,
+    attacker_crew: str,
+    defender_crew: str,
+    result: CrewBankRaidResult,
+    fighters: dict[int, DuelFighter],
+    drug_id: str,
+    drug_name: str,
+    drug_emoji: str,
+    loot_qty: int,
+    defender_stash_after: int,
+) -> discord.Embed:
+    if result.attacker_won:
+        title = f"🌿 {attacker_crew} hit {defender_crew}'s cartel stash!"
+        color = discord.Color.green()
+        summary = (
+            f"**{attacker_crew}** cleared **{result.defenders_defeated}** defenders and stole "
+            f"**{loot_qty}× {drug_emoji} {drug_name}**.\n"
+            f"**{defender_crew}** stash remaining: **{defender_stash_after}** units of that product."
+        )
+    else:
+        title = f"🛡️ {defender_crew} protected their cartel lab!"
+        color = discord.Color.red()
+        summary = (
+            f"**{defender_crew}** held the line — their drug stash is safe."
+        )
+
+    embed = discord.Embed(title=title, description=summary, color=color)
+    bout_text = "\n\n".join(format_bout_summary(bout, fighters) for bout in result.bouts)
+    if len(bout_text) > 3900:
+        bout_text = bout_text[:3897] + "..."
+    embed.add_field(name="Battle log", value=bout_text or "_No fights recorded_", inline=False)
+    return embed
+
+
+def format_business_raid_embed(
+    *,
+    attacker_crew: str,
+    defender_crew: str,
+    result: CrewBankRaidResult,
+    fighters: dict[int, DuelFighter],
+    loot: float,
+    defender_stored_after: float,
+) -> discord.Embed:
+    if result.attacker_won:
+        title = f"🏢 {attacker_crew} raided {defender_crew}'s businesses!"
+        color = discord.Color.green()
+        summary = (
+            f"**{attacker_crew}** cleared **{result.defenders_defeated}** defenders and stole "
+            f"**{loot:,.2f}** nuggets (**{int(config.CREW_BUSINESS_RAID_LOOT_FRACTION * 100)}%** "
+            f"of uncollected business income).\n"
+            f"**{defender_crew}** vaults remaining: **{defender_stored_after:,.2f}** uncollected."
+        )
+    else:
+        title = f"🛡️ {defender_crew} repelled {attacker_crew}!"
+        color = discord.Color.red()
+        summary = (
+            f"**{defender_crew}** held the line — member business vaults are safe."
+        )
+
+    embed = discord.Embed(title=title, description=summary, color=color)
+    bout_text = "\n\n".join(format_bout_summary(bout, fighters) for bout in result.bouts)
+    if len(bout_text) > 3900:
+        bout_text = bout_text[:3897] + "..."
+    embed.add_field(name="Battle log", value=bout_text or "_No fights recorded_", inline=False)
+    return embed

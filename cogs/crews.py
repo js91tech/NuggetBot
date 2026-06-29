@@ -10,6 +10,7 @@ from discord.ext import commands, tasks
 import config
 from utils.crew_ui import build_crew_leaderboard_embed, send_crew_panel
 from utils.crew_bank_raid_ui import send_crew_bank_raid_panel
+from utils.crew_raid_ui import RaidKind, send_crew_raid_panel
 from utils.helpers import (
     fmt_amount,
     guild_only_message,
@@ -127,6 +128,70 @@ class Crews(commands.Cog):
                 break
         return choices
 
+    async def drug_raid_target_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        try:
+            crew = await self.bot.db.get_crew_membership(
+                interaction.user.id, interaction.guild_id,
+            )
+            if not crew:
+                return []
+            targets = await self.bot.db.list_raidable_drug_crews(
+                interaction.guild_id, crew,
+            )
+        except Exception:
+            logger.exception("drug_raid_target_autocomplete failed")
+            return []
+        needle = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        for name, count, stash_total in targets:
+            if needle and needle not in name.lower():
+                continue
+            label = f"{name} ({count} members · {stash_total} units)"
+            if len(label) > 100:
+                label = label[:97] + "..."
+            choices.append(app_commands.Choice(name=label, value=name[:100]))
+            if len(choices) >= 25:
+                break
+        return choices
+
+    async def business_raid_target_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        try:
+            crew = await self.bot.db.get_crew_membership(
+                interaction.user.id, interaction.guild_id,
+            )
+            if not crew:
+                return []
+            targets = await self.bot.db.list_raidable_business_crews(
+                interaction.guild_id, crew,
+            )
+        except Exception:
+            logger.exception("business_raid_target_autocomplete failed")
+            return []
+        needle = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        for name, count, stored in targets:
+            if needle and needle not in name.lower():
+                continue
+            label = f"{name} ({count} members · {fmt_amount(stored)} uncollected)"
+            if len(label) > 100:
+                label = label[:97] + "..."
+            choices.append(app_commands.Choice(name=label, value=name[:100]))
+            if len(choices) >= 25:
+                break
+        return choices
+
     @app_commands.command(
         name="crew-raid",
         description="Launch a crew-vs-crew bank raid. Win automated duels to steal 10% of their treasury.",
@@ -147,6 +212,54 @@ class Crews(commands.Cog):
         except Exception:
             logger.exception("crew-raid failed guild=%s user=%s", interaction.guild_id, interaction.user.id)
             await send_error(interaction, "Could not open the crew raid panel. Try again in a moment.")
+
+    @app_commands.command(
+        name="crew-raid-drugs",
+        description="Raid another crew's cartel drug stash. Win duels to steal 2–5 random units.",
+    )
+    @app_commands.describe(target_crew="Crew whose cartel lab you want to hit")
+    @app_commands.autocomplete(target_crew=drug_raid_target_autocomplete)
+    @app_commands.guild_only()
+    async def crew_raid_drugs(
+        self,
+        interaction: discord.Interaction,
+        target_crew: str,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        try:
+            await send_crew_raid_panel(self, interaction, target_crew, RaidKind.DRUGS)
+        except Exception:
+            logger.exception(
+                "crew-raid-drugs failed guild=%s user=%s", interaction.guild_id, interaction.user.id,
+            )
+            await send_error(interaction, "Could not open the drug raid panel. Try again in a moment.")
+
+    @app_commands.command(
+        name="crew-raid-business",
+        description="Raid another crew's business vaults. Win duels to steal 10% of uncollected income.",
+    )
+    @app_commands.describe(target_crew="Crew whose businesses you want to hit")
+    @app_commands.autocomplete(target_crew=business_raid_target_autocomplete)
+    @app_commands.guild_only()
+    async def crew_raid_business(
+        self,
+        interaction: discord.Interaction,
+        target_crew: str,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        try:
+            await send_crew_raid_panel(self, interaction, target_crew, RaidKind.BUSINESS)
+        except Exception:
+            logger.exception(
+                "crew-raid-business failed guild=%s user=%s", interaction.guild_id, interaction.user.id,
+            )
+            await send_error(
+                interaction, "Could not open the business raid panel. Try again in a moment.",
+            )
 
     @app_commands.command(
         name="crew",
