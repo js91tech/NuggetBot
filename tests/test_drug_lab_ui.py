@@ -67,6 +67,29 @@ class DrugLabUIViewTests(unittest.IsolatedAsyncioTestCase):
         grows = await self.db.list_drug_grows(self.user_id, self.guild_id)
         self.assertEqual(grows, [])
 
+    async def test_harvest_grants_dealer_reputation(self) -> None:
+        await self.db.credit_wallet(self.user_id, self.guild_id, 10_000.0, apply_bonuses=False)
+        await self.db.plant_drug(self.user_id, self.guild_id, "blue_dream")
+        async with self.db._write_lock:
+            await self.db.conn.execute(
+                "UPDATE drug_grows SET ready_at = 0 WHERE user_id = ? AND guild_id = ?",
+                (self.user_id, self.guild_id),
+            )
+            await self.db.conn.commit()
+        harvested = await self.db.harvest_drugs(self.user_id, self.guild_id)
+        total = sum(harvested.values())
+        stats = await self.db.get_drug_stats(self.user_id, self.guild_id)
+        self.assertGreaterEqual(stats["units_harvested"], total)
+        from utils.dealer_ranks import dealer_reputation
+
+        self.assertGreaterEqual(
+            dealer_reputation(
+                units_sold=stats["units_sold"],
+                units_harvested=stats["units_harvested"],
+            ),
+            total,
+        )
+
     async def test_apply_lab_panel_reattaches_banner(self) -> None:
         from unittest.mock import AsyncMock
 

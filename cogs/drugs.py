@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import config
 from utils.drug_ui import (
     build_drug_catalog_embed,
     build_stash_embed,
@@ -194,11 +195,19 @@ class Drugs(commands.Cog):
             await interaction.response.send_message("Could not complete wholesale sale.", ephemeral=True)
             return
         await record_quest_event(self.bot.db, interaction.guild_id, interaction.user.id, "drug_sell")
-        await interaction.response.send_message(
-            f"📦 Wholesale deal: **{quantity}** units for **{fmt_amount(float(result['total']))}** "
-            f"(fixed {fmt_amount(float(result['unit_price']))}/unit, no raid risk).",
-            ephemeral=True,
+        from utils.achievements import evaluate_unlocks, format_unlock_message
+
+        unlocked = await evaluate_unlocks(
+            self.bot.db, interaction.guild_id, interaction.user.id,
         )
+        msg = (
+            f"📦 Wholesale deal: **{quantity}** units for **{fmt_amount(float(result['total']))}** "
+            f"(fixed {fmt_amount(float(result['unit_price']))}/unit, no raid risk)."
+        )
+        ach = format_unlock_message(unlocked)
+        if ach:
+            msg += f"\n{ach}"
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @drugs_group.command(name="rank", description="View your dealer rank and unlock progress.")
     async def rank(self, interaction: discord.Interaction) -> None:
@@ -209,17 +218,36 @@ class Drugs(commands.Cog):
             can_list_on_market,
             can_wholesale,
             dealer_rank,
+            dealer_reputation,
             next_rank_threshold,
             rank_title,
         )
 
         stats = await self.bot.db.get_drug_stats(interaction.user.id, interaction.guild_id)
-        rank = dealer_rank(stats["units_sold"])
+        rank = dealer_rank(
+            units_sold=stats["units_sold"],
+            units_harvested=stats["units_harvested"],
+        )
+        rep = dealer_reputation(
+            units_sold=stats["units_sold"],
+            units_harvested=stats["units_harvested"],
+        )
+        title = rank_title(rank)
         embed = discord.Embed(
-            title=f"Dealer Rank {rank} — {rank_title(rank)}",
-            description=f"Lifetime units sold: **{stats['units_sold']:,}**",
+            title=f"Dealer Rank {rank} — {title}",
+            description=(
+                f"Dealer reputation: **{rep:,}**\n"
+                f"Cultivated: **{stats['units_harvested']:,}** · "
+                f"Sold: **{stats['units_sold']:,}**"
+            ),
             color=discord.Color.dark_green(),
         )
+        if rank >= config.DEALER_RANK_CARTEL_TITLE:
+            embed.add_field(
+                name="Active title",
+                value=f"**{title}** — shown on `/profile`",
+                inline=False,
+            )
         unlocks = [
             "Street selling",
             f"Black market (rank {config.DEALER_RANK_MARKET_UNLOCK})",
@@ -230,7 +258,7 @@ class Drugs(commands.Cog):
         embed.add_field(name="Unlock track", value="\n".join(f"{'✅' if i == 0 or (i == 1 and can_list_on_market(rank)) or (i == 2 and rank >= config.DEALER_RANK_EXTRA_LAB_SLOT) or (i == 3 and can_wholesale(rank)) or (i == 4 and rank >= config.DEALER_RANK_CARTEL_TITLE) else '⬜'} {u}" for i, u in enumerate(unlocks)), inline=False)
         nxt = next_rank_threshold(rank)
         if nxt is not None:
-            embed.set_footer(text=f"{nxt - stats['units_sold']} units to rank {rank + 1}")
+            embed.set_footer(text=f"{max(0, nxt - rep):,} rep to rank {rank + 1}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

@@ -618,12 +618,19 @@ class EndgameDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_prestige_resets_and_increments(self) -> None:
         guild_id, uid = 1, 100
         await self._maxed_business(uid, guild_id)
+        await self.db.upgrade_business_attribute(uid, guild_id, "security")
+        await self.db.upgrade_business_attribute(uid, guild_id, "reputation")
         err, new_prestige = await self.db.prestige_business(uid, guild_id)
         self.assertIsNone(err)
         self.assertEqual(new_prestige, 1)
         row = await self.db.get_business(uid, guild_id)
         self.assertEqual(int(row["tier"]), 1)
         self.assertEqual(int(row["business_prestige"]), 1)
+        self.assertEqual(int(row["security"]), 0)
+        self.assertEqual(int(row["reputation"]), 0)
+        self.assertEqual(int(row["efficiency"]), 0)
+        self.assertEqual(int(row["branch_security"]), 0)
+        self.assertEqual(int(row["employee_satisfaction"]), 50)
 
     async def test_seasonal_event_affects_income(self) -> None:
         guild_id, uid = 1, 100

@@ -158,7 +158,10 @@ async def evaluate_unlocks(
     drug_stats = await db.get_drug_stats(user_id, guild_id)
     from utils.dealer_ranks import dealer_rank
 
-    if dealer_rank(drug_stats["units_sold"]) >= config.DEALER_RANK_CARTEL_TITLE:
+    if dealer_rank(
+        units_sold=drug_stats["units_sold"],
+        units_harvested=drug_stats["units_harvested"],
+    ) >= config.DEALER_RANK_CARTEL_TITLE:
         await grant("cartel_king")
 
     total_influence = 0.0

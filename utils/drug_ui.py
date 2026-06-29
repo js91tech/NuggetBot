@@ -125,7 +125,10 @@ async def user_lab_slot_count(cog: commands.Cog, user_id: int, guild_id: int) ->
     from utils.legacy_perks import extra_lab_slots_from_perks
 
     stats = await cog.bot.db.get_drug_stats(user_id, guild_id)
-    rank = dealer_rank(stats["units_sold"])
+    rank = dealer_rank(
+        units_sold=stats["units_sold"],
+        units_harvested=stats["units_harvested"],
+    )
     legacy = await cog.bot.db.list_legacy_perks(user_id, guild_id)
     return lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
 
@@ -137,9 +140,12 @@ async def build_lab_embed(
     inventory = await cog.bot.db.get_drug_inventory(user_id, guild_id)
     pending_buff = await cog.bot.db.peek_pending_drug_buff(user_id, guild_id)
     stats = await cog.bot.db.get_drug_stats(user_id, guild_id)
-    from utils.dealer_ranks import dealer_rank, next_rank_threshold, rank_title
+    from utils.dealer_ranks import dealer_rank, dealer_reputation, next_rank_threshold, rank_title
 
-    rank = dealer_rank(stats["units_sold"])
+    rank = dealer_rank(
+        units_sold=stats["units_sold"],
+        units_harvested=stats["units_harvested"],
+    )
     max_slots = await user_lab_slot_count(cog, user_id, guild_id)
     now = time.time()
 
@@ -205,9 +211,13 @@ async def build_lab_embed(
     file = discord.File(io.BytesIO(png), filename="lab.png")
     embed.set_image(url="attachment://lab.png")
     next_thr = next_rank_threshold(rank)
-    rank_line = f"Dealer rank **{rank}** ({rank_title(rank)})"
+    rep = dealer_reputation(
+        units_sold=stats["units_sold"],
+        units_harvested=stats["units_harvested"],
+    )
+    rank_line = f"Dealer rank **{rank}** ({rank_title(rank)}) · **{rep:,}** rep"
     if next_thr is not None:
-        rank_line += f" · {stats['units_sold']}/{next_thr} to next rank"
+        rank_line += f" · {max(0, next_thr - rep):,} to next rank"
     embed.set_footer(text=f"{footer} · {rank_line}" if footer else rank_line)
     return embed, file
 
@@ -489,6 +499,12 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
         await interaction.response.defer()
         try:
             await record_quest_event(self.cog.bot.db, self.guild_id, self.user_id, "drug_sell")
+            from utils.achievements import evaluate_unlocks, format_unlock_message
+
+            unlocked = await evaluate_unlocks(
+                self.cog.bot.db, self.guild_id, self.user_id,
+            )
+            ach = format_unlock_message(unlocked)
             defn = drug_by_id(self.drug_id)
             name = defn.name if defn else self.drug_id
             if result.get("raided"):
@@ -500,6 +516,8 @@ class StreetSellModal(discord.ui.Modal, title="Sell on the street"):
                     f"💵 Sold **{int(result['quantity'])} {name}** on the street for "
                     f"**{fmt_amount(float(result['total']))}**."
                 )
+            if ach:
+                desc += f"\n\n{ach}"
             await _apply_lab_panel(
                 interaction, self.cog, self.guild_id, self.user_id, description=desc,
             )
@@ -570,13 +588,19 @@ class DrugLabView(discord.ui.View):
                 await record_quest_event(
                     self.cog.bot.db, self.guild_id, self.user_id, "drug_harvest",
                 )
-                from utils.achievements import ACHIEVEMENTS, format_unlock_message
+                from utils.achievements import ACHIEVEMENTS, evaluate_unlocks, format_unlock_message
 
                 ach_msg = ""
                 if await self.cog.bot.db.unlock_achievement(
                     self.user_id, self.guild_id, "first_harvest",
                 ):
                     ach_msg = format_unlock_message([ACHIEVEMENTS["first_harvest"]])
+                unlocked = await evaluate_unlocks(
+                    self.cog.bot.db, self.guild_id, self.user_id,
+                )
+                extra = format_unlock_message(unlocked)
+                if extra:
+                    ach_msg = f"{ach_msg}\n{extra}" if ach_msg else extra
                 parts = []
                 for drug_id, qty in harvested.items():
                     defn = drug_by_id(drug_id)

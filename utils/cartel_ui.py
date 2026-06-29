@@ -89,7 +89,9 @@ class CartelView(discord.ui.View):
         del button
         await interaction.response.defer()
         try:
-            harvested = await self.cog.bot.db.harvest_cartel(self.guild_id, self.crew_name)
+            harvested = await self.cog.bot.db.harvest_cartel(
+                self.guild_id, self.crew_name, harvester_user_id=self.user_id,
+            )
             embed, view = await build_cartel_panel(
                 self.cog, self.guild_id, self.user_id, self.crew_name,
             )
