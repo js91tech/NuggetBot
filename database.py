@@ -479,6 +479,7 @@ class Database:
         await self._migrate_dlc_expansion()
         await self._migrate_dlc_followup()
         await self._migrate_crew_banking()
+        await self._migrate_crew_bank_raids()
         await self._migrate_territories()
         await self._migrate_territory_integration()
         await self._migrate_personal_bank()
@@ -1632,6 +1633,20 @@ class Database:
                 created_at REAL NOT NULL,
                 due_at REAL NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active'
+            )
+            """,
+        )
+        await self.conn.commit()
+
+    async def _migrate_crew_bank_raids(self) -> None:
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crew_bank_raid_cooldowns (
+                guild_id BIGINT NOT NULL,
+                crew_name TEXT NOT NULL,
+                last_attack_at REAL NOT NULL DEFAULT 0,
+                last_defended_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, crew_name)
             )
             """,
         )
@@ -8315,6 +8330,175 @@ class Database:
         )
         row = await cursor.fetchone()
         return int(row["cnt"]) if row is not None else 0
+
+    async def list_raidable_crews(
+        self, guild_id: int, attacker_crew: str,
+    ) -> list[tuple[str, int, float]]:
+        """Crews eligible as raid targets: min members, min treasury, not self."""
+        import config
+
+        cursor = await self.conn.execute(
+            """
+            SELECT cs.crew_name, cs.treasury,
+                   (SELECT COUNT(*) FROM crew_members cm
+                    WHERE cm.guild_id = cs.guild_id AND cm.crew_name = cs.crew_name) AS member_count
+            FROM crew_stats cs
+            WHERE cs.guild_id = ?
+              AND cs.crew_name != ?
+              AND cs.treasury >= ?
+            ORDER BY cs.treasury DESC, cs.crew_name ASC
+            """,
+            (guild_id, attacker_crew, config.CREW_BANK_RAID_MIN_TREASURY),
+        )
+        rows = await cursor.fetchall()
+        return [
+            (str(row["crew_name"]), int(row["member_count"]), float(row["treasury"]))
+            for row in rows
+            if int(row["member_count"]) >= config.CREW_BANK_RAID_MIN_MEMBERS
+        ]
+
+    async def _crew_bank_raid_cooldown_row(
+        self, guild_id: int, crew_name: str,
+    ) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT last_attack_at, last_defended_at FROM crew_bank_raid_cooldowns
+            WHERE guild_id = ? AND crew_name = ?
+            """,
+            (guild_id, crew_name),
+        )
+        return await cursor.fetchone()
+
+    async def validate_crew_bank_raid(
+        self,
+        guild_id: int,
+        attacker_id: int,
+        attacker_crew: str,
+        defender_crew: str,
+        backup_ids: tuple[int, int],
+    ) -> str | None:
+        """Return an error code or None if the raid may proceed."""
+        import config
+        import time
+
+        if attacker_crew.lower() == defender_crew.lower():
+            return "same_crew"
+        defender = await self.resolve_crew_name(guild_id, defender_crew)
+        if defender is None:
+            return "invalid_defender"
+        attacker_count = await self.count_crew_members(guild_id, attacker_crew)
+        defender_count = await self.count_crew_members(guild_id, defender)
+        if attacker_count < config.CREW_BANK_RAID_MIN_MEMBERS:
+            return "attacker_too_small"
+        if defender_count < config.CREW_BANK_RAID_MIN_MEMBERS:
+            return "defender_too_small"
+        defender_stats = await self.get_crew_stats(guild_id, defender)
+        treasury = float(defender_stats["treasury"]) if defender_stats is not None else 0.0
+        if treasury < config.CREW_BANK_RAID_MIN_TREASURY:
+            return "defender_treasury_low"
+
+        lineup = (attacker_id, backup_ids[0], backup_ids[1])
+        if len(set(lineup)) != len(lineup):
+            return "duplicate_fighters"
+        attacker_members = await self.list_crew_member_user_ids(guild_id, attacker_crew)
+        attacker_set = set(attacker_members)
+        for uid in lineup:
+            if uid not in attacker_set:
+                return "fighter_not_in_crew"
+            if await self.is_restricted(uid, guild_id):
+                return "fighter_restricted"
+
+        now = time.time()
+        attacker_cd = await self._crew_bank_raid_cooldown_row(guild_id, attacker_crew)
+        if attacker_cd is not None:
+            elapsed = now - float(attacker_cd["last_attack_at"])
+            if elapsed < config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS:
+                return "attacker_cooldown"
+        defender_cd = await self._crew_bank_raid_cooldown_row(guild_id, defender)
+        if defender_cd is not None:
+            elapsed = now - float(defender_cd["last_defended_at"])
+            if elapsed < config.CREW_BANK_RAID_DEFENSE_COOLDOWN_SECONDS:
+                return "defender_cooldown"
+        return None
+
+    async def settle_crew_bank_raid(
+        self,
+        guild_id: int,
+        attacker_crew: str,
+        defender_crew: str,
+        *,
+        attacker_won: bool,
+    ) -> dict[str, float | str | bool | None]:
+        """Transfer treasury on success and record raid cooldowns."""
+        import config
+        import time
+
+        defender = await self.resolve_crew_name(guild_id, defender_crew)
+        if defender is None:
+            return {"error": "invalid_defender"}
+        now = time.time()
+        async with self._write_lock:
+            defender_stats = await self.get_crew_stats(guild_id, defender)
+            if defender_stats is None:
+                await self.conn.commit()
+                return {"error": "invalid_defender"}
+            treasury_before = float(defender_stats["treasury"])
+            if treasury_before < config.CREW_BANK_RAID_MIN_TREASURY:
+                await self.conn.commit()
+                return {"error": "defender_treasury_low"}
+
+            loot = 0.0
+            treasury_after = treasury_before
+            if attacker_won:
+                loot = round(treasury_before * config.CREW_BANK_RAID_LOOT_FRACTION, 2)
+                loot = min(loot, treasury_before)
+                treasury_after = round(treasury_before - loot, 2)
+                await self.conn.execute(
+                    """
+                    UPDATE crew_stats SET treasury = treasury - ?
+                    WHERE guild_id = ? AND crew_name = ?
+                    """,
+                    (loot, guild_id, defender),
+                )
+                xp_gain = int(loot // 100)
+                await self.conn.execute(
+                    """
+                    INSERT INTO crew_stats (guild_id, crew_name, treasury, level, xp)
+                    VALUES (?, ?, ?, 1, ?)
+                    ON CONFLICT(guild_id, crew_name) DO UPDATE SET
+                        treasury = crew_stats.treasury + excluded.treasury,
+                        xp = crew_stats.xp + excluded.xp
+                    """,
+                    (guild_id, attacker_crew, loot, xp_gain),
+                )
+                await self._recalc_crew_level_no_lock(guild_id, attacker_crew)
+
+            await self.conn.execute(
+                """
+                INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
+                VALUES (?, ?, ?, 0)
+                ON CONFLICT(guild_id, crew_name) DO UPDATE SET
+                    last_attack_at = excluded.last_attack_at
+                """,
+                (guild_id, attacker_crew, now),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO crew_bank_raid_cooldowns (guild_id, crew_name, last_attack_at, last_defended_at)
+                VALUES (?, ?, 0, ?)
+                ON CONFLICT(guild_id, crew_name) DO UPDATE SET
+                    last_defended_at = excluded.last_defended_at
+                """,
+                (guild_id, defender, now),
+            )
+            await self.conn.commit()
+        return {
+            "error": None,
+            "loot": loot,
+            "treasury_before": treasury_before,
+            "treasury_after": treasury_after,
+            "attacker_won": attacker_won,
+        }
 
     async def credit_crew_treasury_no_wallet(
         self, guild_id: int, crew_name: str, amount: float,

@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 
 import config
 from utils.crew_ui import build_crew_leaderboard_embed, send_crew_panel
+from utils.crew_bank_raid_ui import send_crew_bank_raid_panel
 from utils.helpers import (
     fmt_amount,
     guild_only_message,
@@ -93,6 +94,59 @@ class Crews(commands.Cog):
             if len(choices) >= 25:
                 break
         return choices
+
+    async def raid_target_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        try:
+            crew = await self.bot.db.get_crew_membership(
+                interaction.user.id, interaction.guild_id,
+            )
+            if not crew:
+                return []
+            targets = await self.bot.db.list_raidable_crews(
+                interaction.guild_id, crew,
+            )
+        except Exception:
+            logger.exception("raid_target_autocomplete failed")
+            return []
+        needle = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        for name, count, treasury in targets:
+            if needle and needle not in name.lower():
+                continue
+            label = f"{name} ({count} members · {fmt_amount(treasury)})"
+            if len(label) > 100:
+                label = label[:97] + "..."
+            choices.append(app_commands.Choice(name=label, value=name[:100]))
+            if len(choices) >= 25:
+                break
+        return choices
+
+    @app_commands.command(
+        name="crew-raid",
+        description="Launch a crew-vs-crew bank raid. Win automated duels to steal 10% of their treasury.",
+    )
+    @app_commands.describe(target_crew="Crew whose bank you want to raid")
+    @app_commands.autocomplete(target_crew=raid_target_autocomplete)
+    @app_commands.guild_only()
+    async def crew_raid(
+        self,
+        interaction: discord.Interaction,
+        target_crew: str,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        try:
+            await send_crew_bank_raid_panel(self, interaction, target_crew)
+        except Exception:
+            logger.exception("crew-raid failed guild=%s user=%s", interaction.guild_id, interaction.user.id)
+            await send_error(interaction, "Could not open the crew raid panel. Try again in a moment.")
 
     @app_commands.command(
         name="crew",
