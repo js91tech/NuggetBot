@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from typing import TYPE_CHECKING
 
 import discord
@@ -25,6 +26,8 @@ from utils.quests import record_quest_event
 
 if TYPE_CHECKING:
     from discord.ext import commands
+
+logger = logging.getLogger(__name__)
 
 
 def _bar(current: float, total: float, *, length: int = 12) -> str:
@@ -216,6 +219,57 @@ async def build_business_payload(
     return embed, files, view
 
 
+async def send_business_panel(interaction: discord.Interaction, cog: commands.Cog) -> None:
+    """Open the business management panel (defer, build, send with fallbacks)."""
+    guild_id = interaction.guild_id
+    member = interaction.user
+    if guild_id is None or not isinstance(member, discord.Member):
+        await interaction.response.send_message("Guild only.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        payload = await build_business_payload(cog, member, guild_id, member.id)
+    except Exception:
+        logger.exception(
+            "business panel build failed user=%s guild=%s",
+            member.id,
+            guild_id,
+        )
+        await interaction.followup.send(
+            "Could not open your business — try again in a moment.", ephemeral=True,
+        )
+        return
+    if payload is None:
+        await interaction.followup.send(
+            "You don't own a business yet. Use **/business create** to start "
+            f"with a Lemon Stand ({fmt_amount(tier_def(1).purchase_cost)}).",
+            ephemeral=True,
+        )
+        return
+    embed, files, view = payload
+    try:
+        await interaction.followup.send(embed=embed, files=files, view=view)
+    except discord.HTTPException:
+        logger.exception(
+            "business panel send failed user=%s guild=%s",
+            member.id,
+            guild_id,
+        )
+        try:
+            embed.set_image(url=None)
+            embed.set_thumbnail(url=None)
+            await interaction.followup.send(embed=embed, view=view)
+        except Exception:
+            logger.exception(
+                "business panel fallback send failed user=%s guild=%s",
+                member.id,
+                guild_id,
+            )
+            await interaction.followup.send(
+                "Could not open your business — try again in a moment.", ephemeral=True,
+            )
+
+
 async def _refresh_panel(
     interaction: discord.Interaction,
     cog: commands.Cog,
@@ -314,6 +368,12 @@ class BusinessPanelView(discord.ui.View):
         view = DistrictMapView(self.cog, self.guild_id, self.user_id)
         await interaction.response.send_message(embed=embed, view=view, files=files, ephemeral=True)
 
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=1)
+    async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await interaction.response.defer()
+        await _refresh_panel(interaction, self.cog, self.guild_id, self.user_id)
+
     @discord.ui.button(label="Compete", style=discord.ButtonStyle.danger, row=1)
     async def compete_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
@@ -330,12 +390,6 @@ class BusinessPanelView(discord.ui.View):
         from utils.supply_chain_ui import send_supply_chain_panel
 
         await send_supply_chain_panel(interaction, self.cog)
-
-    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
-    async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        del button
-        await interaction.response.defer()
-        await _refresh_panel(interaction, self.cog, self.guild_id, self.user_id)
 
 
 def build_prestige_embed(row: object) -> discord.Embed:

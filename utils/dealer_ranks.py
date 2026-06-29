@@ -4,14 +4,14 @@ from __future__ import annotations
 import config
 
 
-def dealer_reputation(*, units_sold: int = 0, units_harvested: int = 0) -> int:
+def dealer_reputation(units_sold: int = 0, units_harvested: int = 0) -> int:
     """Total dealer rep — cultivation plus any legacy sales-only progress."""
     sold = max(0, int(units_sold))
     harvested = max(0, int(units_harvested))
     return max(sold, harvested)
 
 
-def dealer_rank(*, units_sold: int = 0, units_harvested: int = 0) -> int:
+def dealer_rank(units_sold: int = 0, units_harvested: int = 0) -> int:
     """Return rank 1–10 from total dealer reputation."""
     rep = dealer_reputation(units_sold=units_sold, units_harvested=units_harvested)
     rank = 1

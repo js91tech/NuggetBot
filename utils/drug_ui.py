@@ -290,9 +290,14 @@ class PlantSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         cost, err = await self.cog.bot.db.plant_drug(self.user_id, self.guild_id, self.values[0])
+        if err == "no_slots":
+            max_slots = await user_lab_slot_count(self.cog, self.user_id, self.guild_id)
+            await interaction.response.send_message(
+                f"All {max_slots} lab slots are busy. Harvest first.", ephemeral=True,
+            )
+            return
         messages = {
             "invalid_drug": "Unknown strain.",
-            "no_slots": f"All {config.DRUG_LAB_SLOTS} lab slots are busy. Harvest first.",
             "insufficient_funds": f"Seeds cost **{fmt_amount(cost)}**.",
         }
         if err:
@@ -737,6 +742,10 @@ class ListProductPriceModal(discord.ui.Modal, title="List product for sale"):
             "invalid_drug": "Unknown product.",
             "invalid_amount": "Enter a valid quantity and price.",
             "insufficient_product": "You don't have that much product to list.",
+            "rank_locked": (
+                f"Black market unlocks at dealer rank **{config.DEALER_RANK_MARKET_UNLOCK}**. "
+                "Keep cultivating and selling to rank up."
+            ),
         }
         if err:
             await interaction.response.send_message(messages.get(err, err), ephemeral=True)

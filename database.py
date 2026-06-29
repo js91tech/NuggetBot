@@ -9589,9 +9589,13 @@ class Database:
         row = await cursor.fetchone()
         if row is None:
             return {"units_sold": 0, "units_harvested": 0}
+        try:
+            harvested = int(row["units_harvested"])
+        except (KeyError, IndexError, TypeError):
+            harvested = 0
         return {
             "units_sold": int(row["units_sold"]),
-            "units_harvested": int(row["units_harvested"]),
+            "units_harvested": harvested,
         }
 
     async def _increment_drug_units_harvested_no_lock(
@@ -10063,9 +10067,9 @@ class Database:
             from utils.legacy_perks import extra_lab_slots_from_perks
 
             rank = dealer_rank(
-            units_sold=stats["units_sold"],
-            units_harvested=stats["units_harvested"],
-        )
+                units_sold=stats["units_sold"],
+                units_harvested=stats["units_harvested"],
+            )
             legacy = await self._list_legacy_perks_no_lock(user_id, guild_id)
             max_slots = lab_slot_count(rank=rank, legacy_extra=extra_lab_slots_from_perks(legacy))
             if row is not None and int(row["c"]) >= max_slots:

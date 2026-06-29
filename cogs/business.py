@@ -9,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import config
-from utils.business_ui import build_business_payload
+from utils.business_ui import build_business_payload, send_business_panel
 from utils.businesses import tier_def
 from utils.helpers import fmt_amount, guild_only_message
 from utils.quests import record_quest_event
@@ -37,21 +37,10 @@ class Business(commands.Cog):
     )
 
     async def _send_panel(self, interaction: discord.Interaction) -> None:
-        guild_id = interaction.guild_id
-        member = interaction.user
-        if guild_id is None or not isinstance(member, discord.Member):
+        if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        payload = await build_business_payload(self, member, guild_id, member.id)
-        if payload is None:
-            await interaction.response.send_message(
-                "You don't own a business yet. Use **/business create** to start "
-                f"with a Lemon Stand ({fmt_amount(tier_def(1).purchase_cost)}).",
-                ephemeral=True,
-            )
-            return
-        embed, files, view = payload
-        await interaction.response.send_message(embed=embed, files=files, view=view)
+        await send_business_panel(interaction, self)
 
     @business_group.command(name="create", description="Open your first business (a Lemon Stand).")
     async def create(self, interaction: discord.Interaction) -> None:

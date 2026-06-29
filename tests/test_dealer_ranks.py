@@ -17,6 +17,9 @@ class DealerRankTests(unittest.TestCase):
     def test_sales_only_legacy_progress_still_counts(self) -> None:
         self.assertEqual(dealer_reputation(units_sold=500, units_harvested=0), 500)
 
+    def test_positional_units_sold_backward_compat(self) -> None:
+        self.assertEqual(dealer_rank(500), dealer_rank(units_sold=500, units_harvested=0))
+
     def test_cartel_title_unlock(self) -> None:
         title = dealer_title_for_stats({"units_sold": 0, "units_harvested": 60_000})
         self.assertEqual(title, "Cartel")
