@@ -228,8 +228,10 @@ class DefendView(discord.ui.View):
             return
         result = await self.cog.bot.db.defend_business(self.defender_id, self.guild_id)
         if result.get("error"):
+            from utils.business_messages import defend_error_message
+
             await interaction.response.send_message(
-                "No active attack to defend right now.", ephemeral=True,
+                defend_error_message(str(result["error"])), ephemeral=True,
             )
             return
         pct = int(float(result["new_penalty"]) * 100)

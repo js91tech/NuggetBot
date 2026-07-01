@@ -186,8 +186,9 @@ class Shop(commands.Cog):
             category=category,
             page=0,
         )
+        await interaction.response.defer(ephemeral=True)
         embed, files, view = await view.build_payload()
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=embed,
             files=files,
             view=view,

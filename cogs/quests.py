@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.helpers import guild_only_message
+from utils.quest_ui import build_quest_embeds
 from utils.quests import (
     EMPIRE_QUESTS,
     ONBOARDING_QUESTS,
@@ -15,7 +16,7 @@ from utils.quests import (
     ensure_empire_quests,
     ensure_onboarding_quests,
     format_quest_lines,
-    is_veteran,
+    quest_by_id,
 )
 
 
@@ -33,64 +34,12 @@ class Quests(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
 
-        await ensure_onboarding_quests(self.bot.db, interaction.guild_id, interaction.user.id)
-        onboard_done = await self.bot.db.count_completed_quests(
-            interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
-        ) >= len(ONBOARDING_QUESTS)
-
-        embeds: list[discord.Embed] = []
-        if not onboard_done:
-            onboard_rows = await self.bot.db.list_user_quests(
-                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
-            )
-            done = await self.bot.db.count_completed_quests(
-                interaction.guild_id, interaction.user.id, TRACK_ONBOARDING,
-            )
-            embed = discord.Embed(
-                title="New raider onboarding",
-                description="\n".join(format_quest_lines(onboard_rows, track=TRACK_ONBOARDING)),
-                color=discord.Color.green(),
-            )
-            embed.add_field(name="Progress", value=f"{done}/{len(ONBOARDING_QUESTS)} complete", inline=False)
-            embeds.append(embed)
-        else:
-            await ensure_empire_quests(self.bot.db, interaction.guild_id, interaction.user.id)
-            empire_done = await self.bot.db.count_completed_quests(
-                interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
-            ) >= len(EMPIRE_QUESTS)
-            if not empire_done:
-                empire_rows = await self.bot.db.list_user_quests(
-                    interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
-                )
-                done = await self.bot.db.count_completed_quests(
-                    interaction.guild_id, interaction.user.id, TRACK_EMPIRE,
-                )
-                embed = discord.Embed(
-                    title="Empire tutorial",
-                    description="\n".join(format_quest_lines(empire_rows, track=TRACK_EMPIRE)),
-                    color=discord.Color.dark_green(),
-                )
-                embed.add_field(name="Progress", value=f"{done}/{len(EMPIRE_QUESTS)} complete", inline=False)
-                embeds.append(embed)
-
-        progress = await self.bot.db.get_user_progress(interaction.user.id, interaction.guild_id)
-        if is_veteran(progress) or onboard_done:
-            await ensure_daily_quests(self.bot.db, interaction.guild_id, interaction.user.id)
-            daily_rows = await self.bot.db.list_user_quests(
-                interaction.guild_id, interaction.user.id, TRACK_DAILY,
-            )
-            daily_embed = discord.Embed(
-                title="Daily goals",
-                description="\n".join(format_quest_lines(daily_rows, track=TRACK_DAILY)),
-                color=discord.Color.blue(),
-            )
-            daily_embed.set_footer(text="Resets at UTC midnight · Rewards pay on completion")
-            embeds.append(daily_embed)
-
-        if not embeds:
-            embeds.append(discord.Embed(title="Quests", description="No active quests.", color=discord.Color.greyple()))
-
-        await interaction.response.send_message(embeds=embeds, ephemeral=True)
+        embeds, view = await build_quest_embeds(
+            self.bot, interaction.guild_id, interaction.user.id,
+        )
+        await interaction.response.send_message(
+            embeds=embeds, view=view, ephemeral=True,
+        )
 
     @app_commands.command(
         name="quest-hint",
@@ -137,7 +86,15 @@ class Quests(commands.Cog):
             return
 
         lines = format_quest_lines(pending[:1], track=track)
-        await interaction.response.send_message(lines[0], ephemeral=True)
+        quest = quest_by_id(str(pending[0]["quest_id"]))
+        hint = lines[0]
+        if quest is not None:
+            from utils.quest_ui import QUEST_SHORTCUT_HINTS
+
+            extra = QUEST_SHORTCUT_HINTS.get(quest.event)
+            if extra:
+                hint += f"\n\n{extra}"
+        await interaction.response.send_message(hint, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

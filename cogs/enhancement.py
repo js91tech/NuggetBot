@@ -52,6 +52,51 @@ class EnhanceSelect(discord.ui.Select):
         await self._view.refresh(interaction)
 
 
+class EnhanceRepairButton(discord.ui.Button):
+    def __init__(self, view: "EnhanceView", instance_id: int, label: str) -> None:
+        super().__init__(label=label[:80], style=discord.ButtonStyle.primary, row=1)
+        self._view = view
+        self.instance_id = instance_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._view.user_id:
+            await interaction.response.send_message("Not your panel.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        row = await self._view.cog.bot.db.get_gear_instance(
+            self.instance_id, self._view.guild_id,
+        )
+        if row is None or int(row["user_id"]) != self._view.user_id:
+            await interaction.followup.send("Instance not found.", ephemeral=True)
+            return
+        cost = repair_nugget_cost(str(row["item_id"]))
+        if not await self._view.cog.bot.db.debit_wallet(
+            self._view.user_id, self._view.guild_id, cost,
+        ):
+            await interaction.followup.send(
+                f"Need **{fmt_amount(cost)}** in your pocket.", ephemeral=True,
+            )
+            return
+        if not await self._view.cog.bot.db.repair_gear_instance(
+            self.instance_id, self._view.guild_id,
+        ):
+            await interaction.followup.send("Repair failed.", ephemeral=True)
+            return
+        self._view.instances = await self._view.cog.bot.db.list_gear_instances(
+            self._view.user_id, self._view.guild_id,
+        )
+        view = self._view._refreshed()
+        panel = await self._view.cog.build_enhance_embed(
+            self._view.guild_id, self._view.user_id, view._selected_row(),
+        )
+        await interaction.edit_original_response(embed=panel, view=view)
+        item = get_item(str(row["item_id"]))
+        item_name = item.name if item is not None else str(row["item_id"])
+        await interaction.followup.send(
+            f"Repaired **{item_name}** for **{fmt_amount(cost)}**.", ephemeral=True,
+        )
+
+
 class EnhanceView(discord.ui.View):
     def __init__(
         self,
@@ -80,13 +125,27 @@ class EnhanceView(discord.ui.View):
         return None
 
     def _refreshed(self) -> EnhanceView:
-        return EnhanceView(
+        view = EnhanceView(
             self.cog,
             self.guild_id,
             self.user_id,
             self.instances,
             instance_id=self.instance_id,
         )
+        row = view._selected_row()
+        if row is not None and bool(int(row["is_broken"])):
+            item = get_item(str(row["item_id"]))
+            cost = repair_nugget_cost(str(row["item_id"]))
+            name = item.name if item is not None else str(row["item_id"])
+            view.add_item(
+                EnhanceRepairButton(
+                    view, int(row["instance_id"]), f"Repair {name} ({fmt_amount(cost)})",
+                ),
+            )
+            for child in view.children:
+                if isinstance(child, discord.ui.Button) and child.label == "Enhance":
+                    child.disabled = True
+        return view
 
     async def refresh(self, interaction: discord.Interaction) -> None:
         view = self._refreshed()
@@ -104,23 +163,24 @@ class EnhanceView(discord.ui.View):
     @discord.ui.button(label="Enhance", style=discord.ButtonStyle.success, row=1)
     async def enhance_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
+        await interaction.response.defer(ephemeral=True)
         row = self._selected_row()
         if row is None:
-            await interaction.response.send_message("Pick a gear instance first.", ephemeral=True)
+            await interaction.followup.send("Pick a gear instance first.", ephemeral=True)
             return
         if bool(int(row["is_broken"])):
-            await interaction.response.send_message(
-                "That gear is broken — use `/repair-gear` first.", ephemeral=True,
+            await interaction.followup.send(
+                "That gear is broken — use **Repair** on this panel.", ephemeral=True,
             )
             return
         level = int(row["enhancement_level"])
         cost = enhance_attempt_cost(level)
         if cost is None:
-            await interaction.response.send_message("Already max enhancement.", ephemeral=True)
+            await interaction.followup.send("Already max enhancement.", ephemeral=True)
             return
         wallet = await self.cog.bot.db.get_balance(self.user_id, self.guild_id)
         if wallet < cost.nugget_cost:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Need **{fmt_amount(cost.nugget_cost)}** in your pocket.", ephemeral=True,
             )
             return
@@ -128,7 +188,7 @@ class EnhanceView(discord.ui.View):
             self.user_id, self.guild_id, cost.material_id,
         )
         if scrap_have < cost.material_qty:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Need **{cost.material_qty}×** `{cost.material_id}`.", ephemeral=True,
             )
             return
@@ -136,14 +196,14 @@ class EnhanceView(discord.ui.View):
             if not await self.cog.bot.db.consume_inventory_item(
                 self.user_id, self.guild_id, cost.material_id,
             ):
-                await interaction.response.send_message("Material consumption failed.", ephemeral=True)
+                await interaction.followup.send("Material consumption failed.", ephemeral=True)
                 return
         if not await self.cog.bot.db.debit_wallet(self.user_id, self.guild_id, cost.nugget_cost):
             for _ in range(cost.material_qty):
                 await self.cog.bot.db.grant_item(
                     self.user_id, self.guild_id, cost.material_id,
                 )
-            await interaction.response.send_message("Could not debit nuggets.", ephemeral=True)
+            await interaction.followup.send("Could not debit nuggets.", ephemeral=True)
             return
         instance_id = int(row["instance_id"])
         result = roll_enhancement(level)
@@ -167,7 +227,7 @@ class EnhanceView(discord.ui.View):
             color=discord.Color.green() if result.success else discord.Color.red(),
         )
         embed.set_footer(text="Tap **Enhance** again to keep going.")
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
 
 class RepairButton(discord.ui.Button):
@@ -253,6 +313,7 @@ class Enhancement(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.sync_gear_instances_from_inventory(
             interaction.user.id, interaction.guild_id,
         )
@@ -261,7 +322,7 @@ class Enhancement(commands.Cog):
         )
         gear_rows = await self.bot.db.list_gear_instances(interaction.user.id, interaction.guild_id)
         if not gear_rows:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You have no enhanceable gear instances yet. Buy or earn weapons, armor, or accessories.",
                 ephemeral=True,
             )
@@ -280,8 +341,9 @@ class Enhancement(commands.Cog):
             gear_rows,
             instance_id=default_id,
         )
-        embed = await self.build_enhance_embed(interaction.guild_id, interaction.user.id, selected)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view = view._refreshed()
+        embed = await self.build_enhance_embed(interaction.guild_id, interaction.user.id, view._selected_row())
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="repair-gear", description="Repair broken enhanced gear (10% of base item price).")
     @app_commands.guild_only()

@@ -7,6 +7,7 @@ import discord
 
 import config
 from utils.crew_banking import max_loan_amount, perks_summary
+from utils.crew_raid_ui import RaidKind, format_crew_raid_cooldowns, open_raid_target_picker
 from utils.helpers import fmt_amount, valid_amount
 from utils.territories import TERRITORY_MAP, format_crew_territory_summary, perks_from_held
 
@@ -76,6 +77,10 @@ async def build_crew_embed(
         )
 
     embed.set_footer(text="Deposit · Withdraw · Borrow · Repay · /territory for zones")
+
+    cooldowns = await format_crew_raid_cooldowns(cog, guild.id, snap["crew_name"])
+    embed.add_field(name="Raid cooldowns", value=cooldowns, inline=False)
+
     return embed, None
 
 
@@ -601,23 +606,61 @@ class CrewPanelView(discord.ui.View):
 
         await send_cartel_panel(interaction, self.cog)
 
+    @discord.ui.button(label="🏴 Raids", style=discord.ButtonStyle.danger, row=5)
+    async def raids_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        del button
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="Crew PvP raids",
+                description="Pick a raid type. You'll choose a target crew next.",
+                color=discord.Color.dark_red(),
+            ),
+            view=CrewRaidMenuView(self.cog),
+            ephemeral=True,
+        )
+
+
+class CrewRaidMenuView(discord.ui.View):
+    def __init__(self, cog: Crews) -> None:
+        super().__init__(timeout=120.0)
+        self.cog = cog
+
+    @discord.ui.button(label="🏦 Bank", style=discord.ButtonStyle.primary, row=0)
+    async def bank_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await open_raid_target_picker(self.cog, interaction, RaidKind.BANK)
+
+    @discord.ui.button(label="🌿 Drugs", style=discord.ButtonStyle.primary, row=0)
+    async def drugs_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await open_raid_target_picker(self.cog, interaction, RaidKind.DRUGS)
+
+    @discord.ui.button(label="🏢 Business", style=discord.ButtonStyle.primary, row=0)
+    async def business_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await open_raid_target_picker(self.cog, interaction, RaidKind.BUSINESS)
+
 
 async def send_crew_panel(interaction: discord.Interaction, cog: Crews) -> None:
     if interaction.guild_id is None or interaction.guild is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
 
+    await interaction.response.defer(ephemeral=True)
+
     snap = await cog.bot.db.get_crew_banking_snapshot(interaction.user.id, interaction.guild_id)
     if snap is None:
         embed = build_no_crew_embed()
         view = await CrewJoinView.build(cog, interaction.guild_id, interaction.user.id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         return
 
     embed, err = await build_crew_embed(cog, interaction.guild, interaction.user.id)
     if err or embed is None:
-        await interaction.response.send_message(err or "Could not load crew panel.", ephemeral=True)
+        await interaction.followup.send(err or "Could not load crew panel.", ephemeral=True)
         return
 
     view = CrewPanelView(cog, interaction.guild_id, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)

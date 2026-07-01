@@ -162,19 +162,23 @@ class ShopView(discord.ui.View):
         embed.set_footer(
             text=(
                 f"Page {self.page + 1}/{self._page_count()} · "
-                "Buy debits pocket · /equip gear after purchase"
+                "Gear auto-equips on purchase"
             ),
         )
         return embed, [file], self
 
     async def refresh(self, interaction: discord.Interaction) -> None:
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         embed, files, view = await self.build_payload()
-        await interaction.response.edit_message(embed=embed, attachments=files, view=view)
+        await interaction.edit_original_response(embed=embed, attachments=files, view=view)
 
     async def buy_item(self, interaction: discord.Interaction, item_id: str) -> None:
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         shop_item = get_item(item_id)
         if shop_item is None or not shop_item.shop_listed or shop_item.price <= 0:
-            await interaction.response.send_message("That item is not for sale.", ephemeral=True)
+            await interaction.followup.send("That item is not for sale.", ephemeral=True)
             return
 
         bought = await self.cog.bot.db.buy_item(
@@ -185,11 +189,19 @@ class ShopView(discord.ui.View):
             quantity=1,
         )
         if not bought:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"You need **{fmt_amount(shop_item.price)}** in your pocket.",
                 ephemeral=True,
             )
             return
+
+        equip_note = ""
+        if shop_item.category in ("weapon", "gun", "armor", "accessory"):
+            slot = await self.cog.bot.db.equip_gear_item(
+                self.user_id, self.guild_id, shop_item.id,
+            )
+            if slot is not None:
+                equip_note = f" Equipped to **{slot}**."
 
         await record_quest_event(
             self.cog.bot.db,
@@ -198,12 +210,8 @@ class ShopView(discord.ui.View):
             "shop_buy",
         )
         embed, files, view = await self.build_payload()
-        await interaction.response.edit_message(
-            embed=embed,
-            attachments=files,
-            view=view,
-        )
+        await interaction.edit_original_response(embed=embed, attachments=files, view=view)
         await interaction.followup.send(
-            f"Purchased **{shop_item.name}** for **{fmt_amount(shop_item.price)}**.",
+            f"Purchased **{shop_item.name}** for **{fmt_amount(shop_item.price)}**.{equip_note}",
             ephemeral=True,
         )

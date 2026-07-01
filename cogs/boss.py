@@ -1202,6 +1202,20 @@ class Boss(commands.Cog):
                 buff_lines.append("💨 " + " · ".join(drug_bits))
             if buff_lines:
                 embed.add_field(name="Active buffs", value="\n".join(buff_lines), inline=False)
+            cooldown = await self.bot.db.boss_attack_cooldown_remaining(guild_id, member.id)
+            if cooldown is not None and cooldown > 0:
+                secs = int(cooldown)
+                embed.add_field(
+                    name="Strike cooldown",
+                    value=f"**{secs // 60}m {secs % 60}s** until your next attack",
+                    inline=True,
+                )
+            else:
+                embed.add_field(
+                    name="Strike cooldown",
+                    value="**Ready**",
+                    inline=True,
+                )
         embed.set_footer(
             text="⚔️ Attack · 👹 Attack Add · ✨ Cast · 💊 Items · ❤️ Heal · 🧪 Auto-heal · Refresh · Raid LB",
         )

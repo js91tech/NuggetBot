@@ -26,6 +26,82 @@ from utils.trap_bombs import TRAP_BOMB_GIF_PATH, TRAP_BOMB_ITEM_ID
 logger = logging.getLogger(__name__)
 
 
+class DuelPreviewView(discord.ui.View):
+    def __init__(
+        self,
+        cog: Duels,
+        guild_id: int,
+        attacker: discord.Member,
+        opponent: discord.Member,
+        *,
+        loss_fraction: float,
+        cooldown_seconds: int,
+        max_per_hour: int,
+        skip_target_cd: bool,
+        attacker_util: object,
+        preview_embed: discord.Embed,
+    ) -> None:
+        super().__init__(timeout=60.0)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.attacker = attacker
+        self.opponent = opponent
+        self.loss_fraction = loss_fraction
+        self.cooldown_seconds = cooldown_seconds
+        self.max_per_hour = max_per_hour
+        self.skip_target_cd = skip_target_cd
+        self.attacker_util = attacker_util
+        self.preview_embed = preview_embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.attacker.id:
+            await interaction.response.send_message(
+                "Only the challenger can confirm this duel.", ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm duel", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        del button
+        await interaction.response.defer()
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.edit_original_response(view=self)
+        try:
+            await self.cog._resolve_duel(
+                interaction,
+                self.guild_id,
+                self.attacker,
+                self.opponent,
+                loss_fraction=self.loss_fraction,
+                cooldown_seconds=self.cooldown_seconds,
+                max_per_hour=self.max_per_hour,
+                skip_target_cd=self.skip_target_cd,
+                attacker_util=self.attacker_util,
+            )
+        except Exception:
+            logger.exception(
+                "duel failed guild=%s attacker=%s", self.guild_id, self.attacker.id,
+            )
+            await send_error(
+                interaction,
+                "The duel could not be completed. Try again in a moment.",
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        del button
+        await interaction.response.edit_message(
+            content="Duel cancelled.", embed=None, view=None,
+        )
+
+
 class RematchView(discord.ui.View):
     """Loser opens a 2-minute window to /duel the winner without same-target cooldown."""
 
@@ -163,24 +239,106 @@ class Duels(commands.Cog):
             )
             return
 
-        try:
-            await self._resolve_duel(
-                interaction,
-                guild_id,
-                attacker,
-                opponent,
-                loss_fraction=loss_fraction,
-                cooldown_seconds=cooldown_seconds,
-                max_per_hour=max_per_hour,
-                skip_target_cd=skip_target_cd,
-                attacker_util=attacker_util,
+        preview_embed = await self._build_duel_preview_embed(
+            guild_id,
+            attacker,
+            opponent,
+            loss_fraction=loss_fraction,
+            cooldown_seconds=cooldown_seconds,
+            max_per_hour=max_per_hour,
+            attacks_last_hour=attacks_last_hour,
+            skip_target_cd=skip_target_cd,
+        )
+        view = DuelPreviewView(
+            self,
+            guild_id,
+            attacker,
+            opponent,
+            loss_fraction=loss_fraction,
+            cooldown_seconds=cooldown_seconds,
+            max_per_hour=max_per_hour,
+            skip_target_cd=skip_target_cd,
+            attacker_util=attacker_util,
+            preview_embed=preview_embed,
+        )
+        await interaction.followup.send(embed=preview_embed, view=view, ephemeral=True)
+
+    async def _build_duel_preview_embed(
+        self,
+        guild_id: int,
+        attacker: discord.Member,
+        opponent: discord.Member,
+        *,
+        loss_fraction: float,
+        cooldown_seconds: int,
+        max_per_hour: int,
+        attacks_last_hour: int,
+        skip_target_cd: bool,
+    ) -> discord.Embed:
+        from utils.character_attributes import combat_bonuses_from_attributes
+        from utils.gear_sets import detect_set_bonus
+        from utils.loadout import parse_resolved_loadout
+        from utils.stats import compute_combat_stats, format_combat_stats_block
+
+        async def fighter_block(member: discord.Member) -> str:
+            records = await self.bot.db.get_equipment_records(member.id, guild_id)
+            instances = {
+                int(row["instance_id"]): row
+                for row in await self.bot.db.list_gear_instances(member.id, guild_id)
+            }
+            loadout = parse_resolved_loadout(records, instances=instances)
+            progress = await self.bot.db.get_user_progress(member.id, guild_id)
+            attrs = await self.bot.db.get_character_attributes(member.id, guild_id)
+            attr_bonuses = combat_bonuses_from_attributes(attrs)
+            set_bonus = detect_set_bonus(loadout.primary, loadout.armor)
+            stats = compute_combat_stats(
+                loadout.primary,
+                loadout.armor,
+                off_hand=loadout.off_hand,
+                prestige_level=int(progress["prestige_level"]),
+                set_bonus=set_bonus,
+                attr_bonuses=attr_bonuses,
+                accessory_bonuses=loadout.accessory_bonuses,
             )
-        except Exception:
-            logger.exception("duel failed guild=%s attacker=%s", guild_id, attacker.id)
-            await send_error(
-                interaction,
-                "The duel could not be completed. Try again in a moment.",
+            weapon_name = loadout.primary.name if loadout.primary else "Unarmed"
+            if loadout.off_hand is not None:
+                weapon_name = f"{weapon_name} + {loadout.off_hand.name}"
+            header = f"**{member.display_name}** — {weapon_name}"
+            body = format_combat_stats_block(
+                stats,
+                set_bonus=set_bonus,
+                prestige_level=int(progress["prestige_level"]),
+                off_hand=loadout.off_hand,
             )
+            wallet = await self.bot.db.get_balance(member.id, guild_id)
+            return f"{header}\n{body}\nPocket: **{fmt_amount(wallet)}**"
+
+        loss_pct = int(round(loss_fraction * 100))
+        opp_wallet = await self.bot.db.get_balance(opponent.id, guild_id)
+        stake = opp_wallet * loss_fraction
+        cd_note = "waived (rematch)" if skip_target_cd else f"**{int(cooldown_seconds // 60)}m** vs same target after"
+        embed = discord.Embed(
+            title="Duel preview",
+            description=(
+                f"Loser pays **{loss_pct}%** of their pocket to the winner.\n"
+                f"If **{opponent.display_name}** loses, stake ≈ **{fmt_amount(stake)}**.\n"
+                f"Your duel budget: **{attacks_last_hour}/{max_per_hour}** this hour · "
+                f"{cd_note}"
+            ),
+            color=discord.Color.orange(),
+        )
+        embed.add_field(
+            name="Challenger",
+            value=await fighter_block(attacker),
+            inline=False,
+        )
+        embed.add_field(
+            name="Opponent",
+            value=await fighter_block(opponent),
+            inline=False,
+        )
+        embed.set_footer(text="Confirm to start the automated duel.")
+        return embed
 
     async def _resolve_duel(
         self,

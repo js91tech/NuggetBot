@@ -285,21 +285,24 @@ async def send_crew_raid_panel(
     kind: RaidKind,
 ) -> None:
     if interaction.guild is None:
-        await interaction.response.send_message("Guild only.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
     uid = interaction.user.id
     snap = await cog.bot.db.get_crew_banking_snapshot(uid, guild.id)
     if snap is None:
-        await interaction.response.send_message(error_message(kind, "not_in_crew"), ephemeral=True)
+        await interaction.followup.send(error_message(kind, "not_in_crew"), ephemeral=True)
         return
     attacker_crew = str(snap["crew_name"])
     defender = await cog.bot.db.resolve_crew_name(guild.id, target_crew)
     if defender is None:
-        await interaction.response.send_message(error_message(kind, "invalid_defender"), ephemeral=True)
+        await interaction.followup.send(error_message(kind, "invalid_defender"), ephemeral=True)
         return
     if defender.lower() == attacker_crew.lower():
-        await interaction.response.send_message(error_message(kind, "same_crew"), ephemeral=True)
+        await interaction.followup.send(error_message(kind, "same_crew"), ephemeral=True)
         return
 
     members = await cog.bot.db.list_crew_members(guild.id, attacker_crew)
@@ -314,7 +317,7 @@ async def send_crew_raid_panel(
             label = label[:97] + "..."
         options.append(discord.SelectOption(label=label, value=str(member_id)))
     if len(options) < config.CREW_BANK_RAID_BACKUP_COUNT:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"You need at least **{config.CREW_BANK_RAID_BACKUP_COUNT}** other crew members "
             f"to pick as backups.",
             ephemeral=True,
@@ -323,10 +326,10 @@ async def send_crew_raid_panel(
 
     embed, err = await build_raid_setup_embed(cog, guild, uid, defender, kind)
     if err:
-        await interaction.response.send_message(error_message(kind, err), ephemeral=True)
+        await interaction.followup.send(error_message(kind, err), ephemeral=True)
         return
     view = CrewRaidView(cog, guild, uid, attacker_crew, defender, options[:25], kind)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 def pick_drug_loot(stash: dict[str, int], rng: random.Random) -> tuple[str, int]:
@@ -472,3 +475,108 @@ async def run_crew_raid(
             await channel.send(embed=public)
         except discord.HTTPException:
             pass
+
+
+async def format_crew_raid_cooldowns(cog: Crews, guild_id: int, crew_name: str) -> str:
+    import time
+
+    row = await cog.bot.db._crew_bank_raid_cooldown_row(guild_id, crew_name)
+    if row is None:
+        return "All raid types **ready**."
+    now = time.time()
+    lines: list[str] = []
+    specs = (
+        ("🏦 Bank attack", "last_attack_at", config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS),
+        ("🌿 Drug raid", "last_drug_attack_at", config.CREW_DRUG_RAID_COOLDOWN_SECONDS),
+        ("🏢 Business raid", "last_business_attack_at", config.CREW_BUSINESS_RAID_COOLDOWN_SECONDS),
+    )
+    for label, col, cd_seconds in specs:
+        elapsed = now - float(row[col])
+        if elapsed < cd_seconds:
+            left = int(cd_seconds - elapsed)
+            lines.append(f"{label}: **{left // 60}m {left % 60}s**")
+        else:
+            lines.append(f"{label}: **ready**")
+    return "\n".join(lines)
+
+
+class RaidTargetSelect(discord.ui.Select):
+    def __init__(
+        self,
+        cog: Crews,
+        kind: RaidKind,
+        targets: list[tuple[str, str]],
+    ) -> None:
+        options = [
+            discord.SelectOption(label=label[:100], value=name[:100])
+            for name, label in targets[:25]
+        ]
+        super().__init__(
+            placeholder=f"Pick a crew to raid ({RAID_META[kind]['title']})…",
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
+        self.cog = cog
+        self.kind = kind
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await send_crew_raid_panel(self.cog, interaction, self.values[0], self.kind)
+
+
+class RaidTargetPickerView(discord.ui.View):
+    def __init__(self, cog: Crews, kind: RaidKind, targets: list[tuple[str, str]]) -> None:
+        super().__init__(timeout=120.0)
+        self.add_item(RaidTargetSelect(cog, kind, targets))
+
+
+async def open_raid_target_picker(
+    cog: Crews,
+    interaction: discord.Interaction,
+    kind: RaidKind,
+) -> None:
+    if interaction.guild_id is None or interaction.guild is None:
+        await interaction.response.send_message("Guild only.", ephemeral=True)
+        return
+    crew = await cog.bot.db.get_crew_membership(interaction.user.id, interaction.guild_id)
+    if crew is None:
+        await interaction.response.send_message(error_message(kind, "not_in_crew"), ephemeral=True)
+        return
+    if kind is RaidKind.BANK:
+        raw = await cog.bot.db.list_raidable_crews(interaction.guild_id, crew)
+        targets = [
+            (name, f"{name} ({count} members · {fmt_amount(treasury)})")
+            for name, count, treasury in raw
+        ]
+    elif kind is RaidKind.DRUGS:
+        raw = await cog.bot.db.list_raidable_drug_crews(interaction.guild_id, crew)
+        targets = [
+            (name, f"{name} ({count} members · {stash} units)")
+            for name, count, stash in raw
+        ]
+    else:
+        raw = await cog.bot.db.list_raidable_business_crews(interaction.guild_id, crew)
+        targets = [
+            (name, f"{name} ({count} members · {fmt_amount(stored)} uncollected)")
+            for name, count, stored in raw
+        ]
+    if not targets:
+        msg = RAID_META[kind]["target_low_msg"]
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return
+    meta = RAID_META[kind]
+    embed = discord.Embed(
+        title=f"{meta['emoji']} Crew {meta['title']} raid",
+        description=_raid_requirements_text(kind),
+        color=discord.Color.dark_red(),
+    )
+    cooldowns = await format_crew_raid_cooldowns(cog, interaction.guild_id, crew)
+    embed.add_field(name="Your crew cooldowns", value=cooldowns, inline=False)
+    view = RaidTargetPickerView(cog, kind, targets)
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

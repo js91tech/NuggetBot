@@ -16,6 +16,7 @@ from utils.drug_ui import (
     send_drug_lab_panel,
     send_drug_market_panel,
 )
+from utils.drug_messages import consume_error_message, wholesale_error_message
 from utils.drugs import drug_by_id
 from utils.helpers import fmt_amount, guild_only_message
 from utils.quests import record_quest_event
@@ -134,7 +135,9 @@ class Drugs(commands.Cog):
             return
         result = await consume_stash_product(self, interaction.guild_id, interaction.user.id, drug_id)
         if result.get("error"):
-            await interaction.response.send_message("Could not use that product.", ephemeral=True)
+            await interaction.response.send_message(
+                consume_error_message(str(result["error"])), ephemeral=True,
+            )
             return
         await record_quest_event(self.bot.db, interaction.guild_id, interaction.user.id, "drug_use")
         await interaction.response.send_message(format_consume_message(result), ephemeral=True)
@@ -192,7 +195,9 @@ class Drugs(commands.Cog):
             )
             return
         if result.get("error"):
-            await interaction.response.send_message("Could not complete wholesale sale.", ephemeral=True)
+            await interaction.response.send_message(
+                wholesale_error_message(str(result["error"])), ephemeral=True,
+            )
             return
         await record_quest_event(self.bot.db, interaction.guild_id, interaction.user.id, "drug_sell")
         from utils.achievements import evaluate_unlocks, format_unlock_message

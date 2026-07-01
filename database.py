@@ -509,6 +509,7 @@ class Database:
         await self._migrate_empire_expansion()
         await self._migrate_drug_harvest_reputation()
         await self._migrate_tier1_retention()
+        await self._migrate_loadout_preset_accessories()
 
     async def _migrate_tier1_retention(self) -> None:
         """Daily streaks, activity XP, trades, weekly stats, notification prefs."""
@@ -1803,6 +1804,33 @@ class Database:
                         ALTER TABLE crew_bank_raid_cooldowns
                         ADD COLUMN {col} REAL NOT NULL DEFAULT 0
                         """,
+                    )
+        await self.conn.commit()
+
+    async def _migrate_loadout_preset_accessories(self) -> None:
+        """Ring and amulet slots on gear loadout presets."""
+        cols = ("ring_id", "amulet_id")
+        if self.is_postgres:
+            for col in cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'loadout_presets' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE loadout_presets ADD COLUMN {col} TEXT",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(loadout_presets)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col in cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE loadout_presets ADD COLUMN {col} TEXT",
                     )
         await self.conn.commit()
 
@@ -11187,6 +11215,22 @@ class Database:
         row = await cursor.fetchone()
         return int(row["id"]) if row is not None and row["id"] is not None else 0
 
+    async def get_active_business_attack(
+        self, user_id: int, guild_id: int,
+    ) -> aiosqlite.Row | None:
+        now = time.time()
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM business_attacks
+            WHERE guild_id = ? AND defender_id = ? AND defended = 0
+              AND notify_expires_at > ? AND ends_at > ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (guild_id, user_id, now, now),
+        )
+        return await cursor.fetchone()
+
     async def defend_business(self, user_id: int, guild_id: int) -> dict[str, object]:
         """Respond to the most recent active attack, halving its remaining penalty."""
         from utils.business_competition import defended_penalty, penalty_to_multiplier
@@ -12231,22 +12275,30 @@ class Database:
         weapon_id: str | None,
         off_hand_id: str | None,
         armor_id: str | None,
+        ring_id: str | None = None,
+        amulet_id: str | None = None,
     ) -> None:
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
             await self.conn.execute(
                 """
                 INSERT INTO loadout_presets (
-                    guild_id, user_id, slot, name, weapon_id, off_hand_id, armor_id
+                    guild_id, user_id, slot, name, weapon_id, off_hand_id, armor_id,
+                    ring_id, amulet_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(guild_id, user_id, slot) DO UPDATE SET
                     name = excluded.name,
                     weapon_id = excluded.weapon_id,
                     off_hand_id = excluded.off_hand_id,
-                    armor_id = excluded.armor_id
+                    armor_id = excluded.armor_id,
+                    ring_id = excluded.ring_id,
+                    amulet_id = excluded.amulet_id
                 """,
-                (guild_id, user_id, slot, name[:32], weapon_id, off_hand_id, armor_id),
+                (
+                    guild_id, user_id, slot, name[:32],
+                    weapon_id, off_hand_id, armor_id, ring_id, amulet_id,
+                ),
             )
             await self.conn.commit()
 

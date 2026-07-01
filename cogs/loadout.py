@@ -4,21 +4,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from items import ShopItem, get_item, is_damage_dealer
+from items import ShopItem, get_item
 from utils.fix_gear_ui import send_fix_panel
 from utils.helpers import fmt_amount, guild_only_message
 from utils.loadout import parse_loadout
-
-
-def _best_damage_item(rows: list) -> ShopItem | None:
-    best: ShopItem | None = None
-    for row in rows:
-        item = get_item(str(row["item_id"]))
-        if item is None or not is_damage_dealer(item):
-            continue
-        if best is None or item.power > best.power:
-            best = item
-    return best
+from utils.loadout_presets import (
+    best_accessory,
+    best_weapon_and_gun,
+    format_preset_slot,
+)
 
 
 def _best_armor(rows: list) -> ShopItem | None:
@@ -73,9 +67,15 @@ class Loadout(commands.Cog):
                 return
             lines = []
             for row in rows:
+                ring_id = row["ring_id"] if "ring_id" in row.keys() else None
+                amulet_id = row["amulet_id"] if "amulet_id" in row.keys() else None
                 lines.append(
-                    f"**Slot {int(row['slot'])}** — {row['name']}: "
-                    f"`{row['weapon_id'] or '—'}` / `{row['off_hand_id'] or '—'}` / `{row['armor_id'] or '—'}`"
+                    f"**Slot {int(row['slot'])}** — {row['name']}:\n"
+                    f"  ⚔️ {format_preset_slot(row['weapon_id'])} · "
+                    f"🔫 {format_preset_slot(row['off_hand_id'])} · "
+                    f"🛡️ {format_preset_slot(row['armor_id'])}\n"
+                    f"  💍 {format_preset_slot(ring_id)} · "
+                    f"📿 {format_preset_slot(amulet_id)}"
                 )
             await interaction.response.send_message("\n".join(lines), ephemeral=True)
             return
@@ -91,9 +91,11 @@ class Loadout(commands.Cog):
                 parsed.primary.id if parsed.primary else None,
                 parsed.off_hand.id if parsed.off_hand else None,
                 parsed.armor.id if parsed.armor else None,
+                parsed.ring.id if parsed.ring else None,
+                parsed.amulet.id if parsed.amulet else None,
             )
             await interaction.response.send_message(
-                f"Saved preset **{name}** to slot **{slot}**.",
+                f"Saved preset **{name}** to slot **{slot}** (weapon, off-hand, armor, ring, amulet).",
                 ephemeral=True,
             )
             return
@@ -105,14 +107,23 @@ class Loadout(commands.Cog):
                     f"No preset in slot **{slot}**.", ephemeral=True,
                 )
                 return
-            for item_id in (row["weapon_id"], row["off_hand_id"], row["armor_id"]):
+            item_ids = [
+                row["weapon_id"],
+                row["off_hand_id"],
+                row["armor_id"],
+            ]
+            if "ring_id" in row.keys():
+                item_ids.append(row["ring_id"])
+            if "amulet_id" in row.keys():
+                item_ids.append(row["amulet_id"])
+            for item_id in item_ids:
                 if item_id:
                     slot_name = await self.bot.db.equip_gear_item(
                         uid, guild_id, str(item_id),
                     )
                     if slot_name is None:
                         await interaction.response.send_message(
-                            f"You no longer own `{item_id}` from that preset.",
+                            f"You no longer own **{format_preset_slot(str(item_id))}** from that preset.",
                             ephemeral=True,
                         )
                         return
@@ -126,7 +137,7 @@ class Loadout(commands.Cog):
 
     @app_commands.command(
         name="equip-best",
-        description="Equip your highest-power weapon/gun and armor from inventory.",
+        description="Equip your best weapon/gun, armor, ring, and amulet from inventory.",
     )
     @app_commands.guild_only()
     async def equip_best(self, interaction: discord.Interaction) -> None:
@@ -134,22 +145,28 @@ class Loadout(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
         rows = await self.bot.db.get_inventory(interaction.user.id, interaction.guild_id)
-        weapon = _best_damage_item(rows)
+        weapon, gun = best_weapon_and_gun(rows)
         armor = _best_armor(rows)
-        if weapon is None and armor is None:
+        ring = best_accessory(rows, "ring")
+        amulet = best_accessory(rows, "amulet")
+        if not any((weapon, gun, armor, ring, amulet)):
             await interaction.response.send_message(
-                "No weapons or armor in inventory.", ephemeral=True,
+                "No weapons, armor, or accessories in inventory.", ephemeral=True,
             )
             return
         equipped: list[str] = []
-        if weapon and await self.bot.db.equip_gear_item(
-            interaction.user.id, interaction.guild_id, weapon.id,
-        ):
+        uid = interaction.user.id
+        guild_id = interaction.guild_id
+        if weapon and await self.bot.db.equip_gear_item(uid, guild_id, weapon.id):
             equipped.append(weapon.name)
-        if armor and await self.bot.db.equip_gear_item(
-            interaction.user.id, interaction.guild_id, armor.id,
-        ):
+        if gun and await self.bot.db.equip_gear_item(uid, guild_id, gun.id):
+            equipped.append(gun.name)
+        if armor and await self.bot.db.equip_gear_item(uid, guild_id, armor.id):
             equipped.append(armor.name)
+        if ring and await self.bot.db.equip_gear_item(uid, guild_id, ring.id):
+            equipped.append(ring.name)
+        if amulet and await self.bot.db.equip_gear_item(uid, guild_id, amulet.id):
+            equipped.append(amulet.name)
         await interaction.response.send_message(
             f"Equipped: **{', '.join(equipped)}**.", ephemeral=True,
         )

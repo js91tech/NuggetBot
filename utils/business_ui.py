@@ -9,6 +9,7 @@ import discord
 
 import config
 from utils.business_art import render_business_image
+from utils.business_competition import action_by_id
 from utils.businesses import (
     UPGRADE_EFFECT_HINTS,
     BusinessIncomeBreakdown,
@@ -214,8 +215,26 @@ async def build_business_payload(
             ends = int(float(buff["ends_at"]))
             lines.append(f"{sign}{pct}% {label} · ends <t:{ends}:R>")
         embed.add_field(name="Active effects", value="\n".join(lines), inline=False)
+
+    attack = await cog.bot.db.get_active_business_attack(user_id, guild_id)
+    if attack is not None:
+        action = action_by_id(str(attack["action_type"]))
+        action_name = action.name if action else str(attack["action_type"])
+        penalty_pct = int(float(attack["penalty"]) * 100)
+        defend_until = int(float(attack["notify_expires_at"]))
+        embed.add_field(
+            name="⚠ Under attack",
+            value=(
+                f"**{action_name}** (−{penalty_pct}% revenue) · "
+                f"defend before <t:{defend_until}:R>"
+            ),
+            inline=False,
+        )
+
     view = BusinessPanelView(cog, guild_id, user_id)
     view.sync_state(row)
+    if attack is not None:
+        view.set_under_attack(int(attack["attack_id"]))
     return embed, files, view
 
 
@@ -300,6 +319,11 @@ class BusinessPanelView(discord.ui.View):
         self.cog = cog
         self.guild_id = guild_id
         self.user_id = user_id
+        self._attack_id: int | None = None
+
+    def set_under_attack(self, attack_id: int) -> None:
+        self._attack_id = attack_id
+        self.add_item(BusinessDefendButton(self))
 
     def sync_state(self, row: object) -> None:
         stored = float(row["stored_income"])
@@ -390,6 +414,39 @@ class BusinessPanelView(discord.ui.View):
         from utils.supply_chain_ui import send_supply_chain_panel
 
         await send_supply_chain_panel(interaction, self.cog)
+
+
+class BusinessDefendButton(discord.ui.Button):
+    def __init__(self, panel: BusinessPanelView) -> None:
+        super().__init__(label="🛡️ Defend attack", style=discord.ButtonStyle.danger, row=2)
+        self.panel = panel
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.panel.user_id:
+            await interaction.response.send_message("Not your business.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        result = await self.panel.cog.bot.db.defend_business(
+            self.panel.user_id, self.panel.guild_id,
+        )
+        if result.get("error"):
+            from utils.business_messages import defend_error_message
+
+            await interaction.followup.send(
+                defend_error_message(str(result["error"])), ephemeral=True,
+            )
+            return
+        pct = int(float(result["new_penalty"]) * 100)
+        await record_quest_event(
+            self.panel.cog.bot.db, self.panel.guild_id, self.panel.user_id, "business_defend",
+        )
+        await interaction.followup.send(
+            f"🛡️ Defended! The attack's penalty is cut to **−{pct}%**.", ephemeral=True,
+        )
+        await _refresh_panel(
+            interaction, self.panel.cog, self.panel.guild_id, self.panel.user_id,
+            note="🛡️ Attack defended — penalty reduced.",
+        )
 
 
 def build_prestige_embed(row: object) -> discord.Embed:

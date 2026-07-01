@@ -145,6 +145,24 @@ class BossFightView(discord.ui.View):
         self.guild_id = guild_id
         self.user_id = user_id
 
+    async def sync_strike_cooldown(self) -> None:
+        remaining = await self.cog.bot.db.boss_attack_cooldown_remaining(
+            self.guild_id, self.user_id,
+        )
+        for item in self.children:
+            if not isinstance(item, discord.ui.Button):
+                continue
+            label = item.label or ""
+            if label.startswith("⚔️ Attack") and "Add" not in label:
+                if remaining is not None and remaining > 0:
+                    secs = int(remaining)
+                    item.disabled = True
+                    item.label = f"⚔️ Attack ({secs}s)"
+                else:
+                    item.disabled = False
+                    item.label = "⚔️ Attack"
+                break
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
@@ -182,6 +200,7 @@ class BossFightView(discord.ui.View):
         if result.embed is None:
             await interaction.followup.send("Attack failed.", ephemeral=True)
             return
+        await self.sync_strike_cooldown()
         kwargs: dict = {"embed": result.embed, "view": self}
         if result.files:
             kwargs["attachments"] = result.files
@@ -215,12 +234,14 @@ class BossFightView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=0)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
+        await interaction.response.defer()
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         embed, err = await self.cog.build_boss_fight_embed(self.guild_id, member=member)
         if err:
-            await interaction.response.send_message(err, ephemeral=True)
+            await interaction.followup.send(err, ephemeral=True)
             return
-        await interaction.response.edit_message(embed=embed, view=self)
+        await self.sync_strike_cooldown()
+        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="Raid LB", style=discord.ButtonStyle.secondary, row=0)
     async def leaderboard_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -473,4 +494,5 @@ async def send_boss_fight_panel(
         return
 
     view = BossFightView(cog, interaction.guild_id, interaction.user.id)
+    await view.sync_strike_cooldown()
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
