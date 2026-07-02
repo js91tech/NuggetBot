@@ -203,8 +203,6 @@ async def build_business_payload(
         embed.set_thumbnail(url="attachment://district.png")
     buffs = await cog.bot.db.list_active_business_buffs(user_id, guild_id)
     if buffs:
-        from utils.business_competition import action_by_id
-
         lines = []
         for buff in buffs:
             mult = float(buff["multiplier"])

@@ -137,6 +137,27 @@ class DrugLabUIViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stash_select.disabled)
         self.assertGreater(len(stash_select.options), 1)
 
+    async def test_send_drug_lab_panel_builds_cleanly(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from utils.drug_ui import send_drug_lab_panel
+
+        cog = MagicMock()
+        cog.bot.db = self.db
+        interaction = MagicMock()
+        interaction.guild_id = self.guild_id
+        interaction.user.id = self.user_id
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+        await send_drug_lab_panel(interaction, cog)
+        interaction.response.defer.assert_awaited_once()
+        interaction.followup.send.assert_awaited_once()
+        kwargs = interaction.followup.send.await_args.kwargs
+        self.assertIn("embed", kwargs)
+        self.assertIn("view", kwargs)
+        self.assertIn("file", kwargs)
+        self.assertEqual(kwargs["embed"].title, "🧪 Grow Lab")
+
 
 if __name__ == "__main__":
     unittest.main()
