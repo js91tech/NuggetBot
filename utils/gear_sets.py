@@ -44,6 +44,12 @@ ITEM_SET_MAP: dict[str, str] = {
     "apotheosis_carapace": "dominion",
     "reaper_fang": "reaper",
     "reaper_crossbow": "reaper",
+    "paragon_edge": "paragon",
+    "paragon_repeater": "paragon",
+    "paragon_aegis": "paragon",
+    "eternal_worldcleaver": "eternal",
+    "eternal_obliteratrix": "eternal",
+    "eternal_bastion": "eternal",
     "mythic_raid_blade": "mythic",
     "mythic_raid_mail": "mythic",
     "boss_slayer_blade": "slayer",
@@ -71,6 +77,8 @@ SET_DISPLAY_NAMES: dict[str, str] = {
     "transcendent": "Transcendent",
     "dominion": "Dominion",
     "reaper": "Reaper",
+    "paragon": "Paragon",
+    "eternal": "Eternal",
 }
 
 

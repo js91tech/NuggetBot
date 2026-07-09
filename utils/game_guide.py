@@ -277,7 +277,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     f"· Accessory drop chance on clear (~{int(config.DUNGEON_ACCESSORY_DROP_CHANCE * 100)}% standard, "
                     f"~{int(config.DUNGEON_VAULT_ACCESSORY_DROP_CHANCE * 100)}% vault)\n"
                     "· **Gilded Vault** full clear can also roll **void hardener**",
-                    "`/alchemy` — craft raid potions, energy drinks, duel scrolls, trap bombs from scrap",
+                    "`/alchemy` — craft raid potions, energy drinks, trap bombs from scrap",
                     f"**Energy** — base cap **{config.ENERGY_BASE_CAP}**, regen every "
                     f"{config.ENERGY_REGEN_INTERVAL_SECONDS // 60} min; `/upgrade-energy` raises max",
                 ],
@@ -417,7 +417,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                 + [
                     "",
                     "**Usage**\n"
-                    "`/use` — raid potion, energy drink, duel scroll, jail/pick keys, HP potions in raids\n"
+                    "`/use` — raid potion, energy drink, jail/pick keys, HP potions in raids\n"
                     "Trap bombs — duel consumable from alchemy\n"
                     "**Enhancement materials** (drops, not shop-listed)\n"
                     "· **Alchemy scrap** — +1–+10 enhancement\n"

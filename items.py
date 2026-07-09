@@ -129,6 +129,26 @@ WEAPONS: tuple[ShopItem, ...] = (
         ("reaper-strikes", "execution-cuts"),
         crit_chance=0.31,
     ),
+    ShopItem(
+        "paragon_edge",
+        "Paragon Edge",
+        "weapon",
+        25_000_000,
+        445,
+        "Ten percent past Dominion — the 25M shop ceiling breaker.",
+        ("paragon-cleaves", "eclipses"),
+        crit_chance=0.23,
+    ),
+    ShopItem(
+        "eternal_worldcleaver",
+        "Eternal Worldcleaver",
+        "weapon",
+        50_000_000,
+        534,
+        "Twenty percent beyond Paragon — the 50M eternal grind.",
+        ("eternal-rends", "worldcleaves"),
+        crit_chance=0.24,
+    ),
 )
 
 GUNS: tuple[ShopItem, ...] = (
@@ -292,6 +312,26 @@ GUNS: tuple[ShopItem, ...] = (
         ("reaper-bolts", "execution-shots"),
         crit_chance=0.31,
     ),
+    ShopItem(
+        "paragon_repeater",
+        "Paragon Repeater",
+        "gun",
+        25_000_000,
+        445,
+        "Ten percent past Dominion — matched 25M ranged firepower.",
+        ("paragon-bursts", "eclipses"),
+        crit_chance=0.23,
+    ),
+    ShopItem(
+        "eternal_obliteratrix",
+        "Eternal Obliteratrix",
+        "gun",
+        50_000_000,
+        534,
+        "Twenty percent beyond Paragon — the 50M eternal barrage.",
+        ("eternal-obliterates", "unmakes"),
+        crit_chance=0.24,
+    ),
 )
 
 ARMOR: tuple[ShopItem, ...] = (
@@ -355,8 +395,26 @@ ARMOR: tuple[ShopItem, ...] = (
         "armor",
         10_000_000,
         271,
-        "Seven percent beyond Transcendent — the ultimate shop plating.",
+        "Seven percent beyond Transcendent — Dominion-set plating.",
         hp_bonus=474,
+    ),
+    ShopItem(
+        "paragon_aegis",
+        "Paragon Aegis",
+        "armor",
+        15_000_000,
+        298,
+        "Ten percent past Apotheosis — matched 25M Paragon plating.",
+        hp_bonus=521,
+    ),
+    ShopItem(
+        "eternal_bastion",
+        "Eternal Bastion",
+        "armor",
+        30_000_000,
+        358,
+        "Twenty percent beyond Paragon — the 50M eternal shell.",
+        hp_bonus=625,
     ),
 )
 
@@ -464,15 +522,6 @@ ENERGY_DRINK = ShopItem(
     400,
     0,
     "Use with /use: restores 15 job energy instantly.",
-    shop_listed=True,
-)
-DUEL_SCROLL = ShopItem(
-    "duel_scroll",
-    "Duel Scroll",
-    "consumable",
-    600,
-    0,
-    "Use before /duel: next duel strike deals +15% damage.",
     shop_listed=True,
 )
 CHIA_SEEDS = ShopItem(
@@ -632,7 +681,6 @@ CONSUMABLES: tuple[ShopItem, ...] = (
     HP_POTION_LARGE,
     HP_POTION_XXL,
     ENERGY_DRINK,
-    DUEL_SCROLL,
     CHIA_SEEDS,
     JAIL_KEY,
     PICK_KEY,

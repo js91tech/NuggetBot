@@ -147,7 +147,6 @@ async def execute_use(
     await cog.bot.db.set_pending_consumable(user_id, guild_id, item_id)
     hint = {
         "raid_potion": "Next **/attack** deals +20% boss damage.",
-        "duel_scroll": "Your next **/duel** deals +15% strike damage.",
     }.get(item_id, "Buff active.")
     return None, f"Used **{shop_item.name}**. {hint} (5 min window)"
 
@@ -192,7 +191,7 @@ async def build_use_embed(cog: commands.Cog, user_id: int, guild_id: int) -> dis
             value=f"**{pending['name']}** — expires <t:{int(float(pending['expires']))}:R>",
             inline=False,
         )
-    embed.set_footer(text="Raid potions & duel scrolls buff your next attack · drugs have timed effects")
+    embed.set_footer(text="Raid potions buff your next boss attack · drugs have timed effects")
     return embed
 
 

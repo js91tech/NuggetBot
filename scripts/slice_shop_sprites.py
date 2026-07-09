@@ -74,7 +74,7 @@ NORMAL_CELL_IDS: tuple[str | None, ...] = (
     "trap_bomb",
     "raid_potion",
     "energy_drink",
-    "duel_scroll",
+    None,  # former duel_scroll cell — keep 7×8 sheet layout
     "chia_seeds",
     "alchemy_scrap",
     "nugget_coin",
@@ -95,7 +95,6 @@ BATTLE_WORN_SKIP = frozenset(
         "trap_bomb",
         "raid_potion",
         "energy_drink",
-        "duel_scroll",
         "chia_seeds",
         "alchemy_scrap",
         "nugget_coin",

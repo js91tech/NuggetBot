@@ -330,7 +330,6 @@ FREAKY_NIKKI_SCRAP_RANGE = (2, 8)
 FREAKY_NIKKI_CONSUMABLE_POOL: tuple[str, ...] = (
     "raid_potion",
     "energy_drink",
-    "duel_scroll",
     "hp_potion_small",
     "hp_potion_medium",
     "trap_bomb",

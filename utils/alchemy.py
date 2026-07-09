@@ -31,14 +31,6 @@ RECIPES: tuple[AlchemyRecipe, ...] = (
         "Instant +15 job energy.",
     ),
     AlchemyRecipe(
-        "duel_scroll",
-        "Duel Scroll",
-        "duel_scroll",
-        3,
-        200.0,
-        "Next duel first strike +15%.",
-    ),
-    AlchemyRecipe(
         "trap_bomb",
         "Trap Bomb",
         "trap_bomb",

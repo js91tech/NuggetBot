@@ -399,10 +399,6 @@ class Duels(commands.Cog):
             attr_bonuses=defender_attr_bonuses,
             trap_bomb_count=defender_bombs,
         )
-        if await self.bot.db.take_pending_consumable(
-            attacker.id, guild_id, "duel_scroll",
-        ):
-            attacker_fighter.consumable_boost = 1.15
         drug_buff = await self.bot.db.peek_pending_drug_buff(attacker.id, guild_id)
         if drug_buff is not None and float(drug_buff["duel_mult"]) > 1.0:
             attacker_fighter.consumable_boost = max(

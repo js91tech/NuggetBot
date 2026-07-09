@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Generate deterministic 64×64 pixel-art item icons for shop gear."""
+"""Generate deterministic 64×64 pixel-art item icons for shop gear.
+
+Prefer hand-authored / AI custom icons already present in assets/items/.
+This script only fills missing placeholders unless --force is passed.
+"""
 from __future__ import annotations
 
 import argparse
@@ -21,6 +25,12 @@ NEW_ITEM_IDS: tuple[str, ...] = (
     "reaper_fang",
     "reaper_crossbow",
     "apotheosis_carapace",
+    "paragon_edge",
+    "paragon_repeater",
+    "paragon_aegis",
+    "eternal_worldcleaver",
+    "eternal_obliteratrix",
+    "eternal_bastion",
 )
 
 ITEM_THEMES: dict[str, tuple[tuple[int, int, int], tuple[int, int, int], str]] = {
@@ -32,6 +42,12 @@ ITEM_THEMES: dict[str, tuple[tuple[int, int, int], tuple[int, int, int], str]] =
     "reaper_fang": ((30, 90, 50), (120, 220, 140), "weapon"),
     "reaper_crossbow": ((30, 90, 50), (120, 220, 140), "gun"),
     "apotheosis_carapace": ((240, 230, 180), (255, 255, 220), "armor"),
+    "paragon_edge": ((70, 130, 200), (160, 210, 255), "weapon"),
+    "paragon_repeater": ((70, 130, 200), (160, 210, 255), "gun"),
+    "paragon_aegis": ((70, 130, 200), (200, 230, 255), "armor"),
+    "eternal_worldcleaver": ((180, 40, 60), (255, 120, 90), "weapon"),
+    "eternal_obliteratrix": ((180, 40, 60), (255, 120, 90), "gun"),
+    "eternal_bastion": ((180, 40, 60), (255, 160, 130), "armor"),
 }
 
 
@@ -90,11 +106,19 @@ def generate_icon(item_id: str, *, size: int = ICON_SIZE) -> Image.Image:
     return img
 
 
-def write_icons(item_ids: tuple[str, ...] | list[str], out_dir: Path = OUT_DIR) -> list[Path]:
+def write_icons(
+    item_ids: tuple[str, ...] | list[str],
+    out_dir: Path = OUT_DIR,
+    *,
+    force: bool = False,
+) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for item_id in item_ids:
         path = out_dir / f"{item_id}.png"
+        if path.is_file() and not force:
+            # Preserve custom AI / sprite-sheet icons.
+            continue
         generate_icon(item_id).save(path)
         written.append(path)
     return written
@@ -112,11 +136,18 @@ def main() -> int:
         default=str(OUT_DIR),
         help="Output directory for PNG icons",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing icons (including custom AI art)",
+    )
     args = parser.parse_args()
     ids = tuple(args.item_ids) if args.item_ids else NEW_ITEM_IDS
-    paths = write_icons(ids, Path(args.out_dir))
+    paths = write_icons(ids, Path(args.out_dir), force=args.force)
     for path in paths:
         print(path)
+    if not paths:
+        print("No icons written (existing custom icons preserved; pass --force to overwrite).")
     return 0
 
 
