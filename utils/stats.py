@@ -33,6 +33,17 @@ def hp_bar(current: float, maximum: float, *, length: int = 12) -> str:
 def format_item_stats(item: ShopItem) -> str:
     if item.category == "consumable":
         return item.description
+    if item.category == "accessory":
+        parts: list[str] = []
+        if item.flat_damage:
+            parts.append(f"+{item.flat_damage} dmg")
+        if item.flat_hp:
+            parts.append(f"+{item.flat_hp} HP")
+        if item.flat_crit:
+            parts.append(f"+{int(item.flat_crit * 100)}% crit")
+        if item.flat_mitigation:
+            parts.append(f"+{int(item.flat_mitigation * 100)}% mit")
+        return " · ".join(parts) if parts else "flat bonuses"
     if is_damage_dealer(item):
         crit = f", {int(item.crit_chance * 100)}% crit" if item.crit_chance > 0 else ""
         lo = item.power + config.BOSS_ATTACK_BONUS_MIN

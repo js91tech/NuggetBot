@@ -414,6 +414,7 @@ class Crews(commands.Cog):
                         "amount_too_low": f"Minimum loan is {fmt_amount(config.CREW_LOAN_MIN_AMOUNT)}.",
                         "amount_too_high": "Loan exceeds your crew limit or treasury.",
                         "insufficient_treasury": "Crew treasury does not have enough nuggets.",
+                        "no_treasury": "Crew treasury is missing — rejoin or ask an admin.",
                         "invalid_amount": "Enter a positive amount.",
                     }
                     if err:

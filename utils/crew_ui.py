@@ -238,6 +238,7 @@ class BorrowModal(_AmountModal):
                 "amount_too_low": f"Minimum loan is {fmt_amount(config.CREW_LOAN_MIN_AMOUNT)}.",
                 "amount_too_high": "Loan exceeds your crew limit or treasury.",
                 "insufficient_treasury": "Crew treasury does not have enough nuggets.",
+                "no_treasury": "Crew treasury is missing — rejoin or ask an admin.",
                 "invalid_amount": "Enter a positive amount.",
             }
             await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
@@ -606,7 +607,8 @@ class CrewPanelView(discord.ui.View):
 
         await send_cartel_panel(interaction, self.cog)
 
-    @discord.ui.button(label="🏴 Raids", style=discord.ButtonStyle.danger, row=5)
+    # Discord allows rows 0–4 only (max 5 buttons per row). Keep Raids on row 4.
+    @discord.ui.button(label="🏴 Raids", style=discord.ButtonStyle.danger, row=4)
     async def raids_button(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:

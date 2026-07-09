@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 from cogs.crews import Crews
 from database import Database
-from utils.crew_ui import build_crew_embed, build_no_crew_embed
+from utils.crew_ui import CrewPanelView, build_crew_embed, build_no_crew_embed
 
 
 class CrewEmbedTests(unittest.IsolatedAsyncioTestCase):
@@ -47,6 +47,13 @@ class CrewEmbedTests(unittest.IsolatedAsyncioTestCase):
     def test_no_crew_embed_has_title(self) -> None:
         embed = build_no_crew_embed()
         self.assertEqual(embed.title, "Crew bank")
+
+    def test_crew_panel_view_fits_discord_row_limit(self) -> None:
+        view = CrewPanelView(self.cog, self.guild_id, self.uid)
+        rows = view.to_components()
+        self.assertLessEqual(len(rows), 5)
+        for row in rows:
+            self.assertLessEqual(len(row["components"]), 5)
 
 
 if __name__ == "__main__":

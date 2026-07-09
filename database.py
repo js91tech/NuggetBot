@@ -8076,10 +8076,19 @@ class Database:
         return None
 
     async def leave_crew(self, user_id: int, guild_id: int) -> bool | str:
-        loan = await self.get_active_crew_loan(user_id, guild_id)
-        if loan is not None and float(loan["remaining"]) > 0:
-            return "active_loan"
         async with self._write_lock:
+            loan_cursor = await self.conn.execute(
+                """
+                SELECT remaining FROM crew_loans
+                WHERE guild_id = ? AND borrower_id = ?
+                  AND status = 'active' AND remaining > 0
+                LIMIT 1
+                """,
+                (guild_id, user_id),
+            )
+            loan = await loan_cursor.fetchone()
+            if loan is not None:
+                return "active_loan"
             cursor = await self.conn.execute(
                 "DELETE FROM crew_members WHERE guild_id = ? AND user_id = ?",
                 (guild_id, user_id),

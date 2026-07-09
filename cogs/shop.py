@@ -487,15 +487,13 @@ class Shop(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
         target = user or interaction.user
+        await self.bot.db.sync_gear_instances_from_inventory(target.id, interaction.guild_id)
         rows = await self.bot.db.get_inventory(target.id, interaction.guild_id)
         equipment = await self.bot.db.get_equipment(target.id, interaction.guild_id)
-        if not rows:
-            owned = "No gear yet. Use `/shop` to browse items."
-        else:
-            owned = "\n".join(
-                self._inventory_line(str(row["item_id"]), int(row["quantity"]), equipment)
-                for row in rows
-            )
+        item_lines = [
+            self._inventory_line(str(row["item_id"]), int(row["quantity"]), equipment)
+            for row in rows
+        ]
 
         loadout = await self.bot.db.get_combat_loadout(target.id, interaction.guild_id)
         unstable = await self.bot.db.list_unstable_slots(target.id, interaction.guild_id)
@@ -514,29 +512,58 @@ class Shop(commands.Cog):
             prestige_level=int(progress["prestige_level"]),
             off_hand=loadout.off_hand,
         )
+        if unstable:
+            summary = f"{summary}\n_Unstable slots: {', '.join(unstable)} — `/fix`_"
+        if len(summary) > _EMBED_FIELD_MAX:
+            summary = summary[: _EMBED_FIELD_MAX - 1] + "…"
+
         instances = await self.bot.db.list_gear_instances(target.id, interaction.guild_id)
         instance_lines: list[str] = []
         if instances:
-            from utils.enhancement import display_level, format_instance_label
+            from utils.enhancement import format_instance_label
 
-            for row in instances[:15]:
+            shown = 0
+            for row in instances:
                 item = get_item(str(row["item_id"]))
                 if item is None:
                     continue
-                instance_lines.append(
-                    format_instance_label(
-                        item,
-                        int(row["instance_id"]),
-                        int(row["enhancement_level"]),
-                        broken=bool(int(row["is_broken"])),
-                    ),
+                line = format_instance_label(
+                    item,
+                    int(row["instance_id"]),
+                    int(row["enhancement_level"]),
+                    broken=bool(int(row["is_broken"])),
                 )
+                candidate = instance_lines + [line]
+                if shown >= 15 or len("\n".join(candidate)) > _EMBED_FIELD_MAX - 40:
+                    remaining = len(instances) - shown
+                    if remaining > 0:
+                        instance_lines.append(
+                            f"_…and {remaining} more — `/enhance` / `/equip-instance`_"
+                        )
+                    break
+                instance_lines.append(line)
+                shown += 1
 
         embed = discord.Embed(
             title=f"{target.display_name}'s Gear",
-            description=owned,
             color=discord.Color.blue(),
         )
+        if not item_lines:
+            embed.description = "No gear yet. Use `/shop` to browse items."
+        else:
+            description, field_chunks = _shop_embed_chunks(item_lines)
+            if description is not None:
+                embed.description = description
+            else:
+                embed.description = (
+                    f"**{len(item_lines)}** owned stacks — split across fields below."
+                )
+                for field_name, field_value in field_chunks:
+                    # Leave room for loadout + instances fields.
+                    if len(embed.fields) >= 22:
+                        break
+                    embed.add_field(name=field_name, value=field_value, inline=False)
+
         embed.add_field(name="Equipped loadout", value=summary, inline=False)
         if instance_lines:
             embed.add_field(
