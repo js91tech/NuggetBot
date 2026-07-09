@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -19,12 +20,20 @@ async def build_crew_embed(
     cog: Crews,
     guild: discord.Guild,
     uid: int,
+    *,
+    snap: dict[str, object] | None = None,
 ) -> tuple[discord.Embed | None, str | None]:
-    snap = await cog.bot.db.get_crew_banking_snapshot(uid, guild.id)
+    if snap is None:
+        snap = await cog.bot.db.get_crew_banking_snapshot(uid, guild.id)
     if snap is None:
         return None, "You are not in a crew."
 
-    members = await cog.bot.db.list_crew_members(guild.id, snap["crew_name"])
+    crew_name = str(snap["crew_name"])
+    wallet, members, held = await asyncio.gather(
+        cog.bot.db.get_balance(uid, guild.id),
+        cog.bot.db.list_crew_members(guild.id, crew_name),
+        cog.bot.db.list_crew_held_territories(guild.id, crew_name),
+    )
     member_names: list[str] = []
     for row in members[:8]:
         member = guild.get_member(int(row["user_id"]))
@@ -32,7 +41,6 @@ async def build_crew_embed(
 
     level = int(snap["level"])
     treasury = float(snap["treasury"])
-    wallet = await cog.bot.db.get_balance(uid, guild.id)
     loan = snap["loan"]
     max_borrow = max_loan_amount(treasury, level)
 
@@ -48,7 +56,6 @@ async def build_crew_embed(
     embed.add_field(name="Max borrow", value=fmt_amount(max_borrow), inline=True)
     embed.add_field(name="Perks", value=perks_summary(level), inline=False)
 
-    held = await cog.bot.db.list_crew_held_territories(guild.id, snap["crew_name"])
     if held:
         income_total = sum(
             TERRITORY_MAP[t].income_per_hour for t, _ in held if t in TERRITORY_MAP
@@ -113,22 +120,34 @@ async def refresh_crew_message(
     cog: Crews,
     guild_id: int,
     user_id: int,
+    *,
+    defer_first: bool = False,
 ) -> None:
     guild = interaction.guild
     if guild is None:
-        await interaction.response.send_message("Guild only.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+
+    if defer_first and not interaction.response.is_done():
+        await interaction.response.defer()
 
     snap = await cog.bot.db.get_crew_banking_snapshot(user_id, guild_id)
     if snap is None:
         embed = build_no_crew_embed()
         view = await CrewJoinView.build(cog, guild_id, user_id)
-        await interaction.response.edit_message(embed=embed, view=view)
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=view)
         return
 
-    embed, _ = await build_crew_embed(cog, guild, user_id)
+    embed, _ = await build_crew_embed(cog, guild, user_id, snap=snap)
     view = CrewPanelView(cog, guild_id, user_id)
-    await interaction.response.edit_message(embed=embed, view=view)
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class _AmountModal(discord.ui.Modal):
@@ -173,6 +192,7 @@ class DepositModal(_AmountModal):
         if value is None:
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.deposit_crew_treasury(self.user_id, self.guild_id, value)
         if err:
             msgs = {
@@ -181,7 +201,7 @@ class DepositModal(_AmountModal):
                 "invalid_amount": "Enter a positive amount.",
                 "treasury_error": "Could not update crew treasury. Try again.",
             }
-            await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
+            await interaction.followup.send(msgs.get(err, err), ephemeral=True)
             return
         await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
 
@@ -195,6 +215,7 @@ class WithdrawModal(_AmountModal):
         if value is None:
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.withdraw_crew_contribution(
             self.user_id, self.guild_id, value,
         )
@@ -207,7 +228,7 @@ class WithdrawModal(_AmountModal):
                 "insufficient_funds": "Could not credit your wallet.",
                 "invalid_amount": "Enter a positive amount.",
             }
-            await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
+            await interaction.followup.send(msgs.get(err, err), ephemeral=True)
             return
         await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
 
@@ -230,6 +251,7 @@ class BorrowModal(_AmountModal):
                 ephemeral=True,
             )
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.issue_crew_loan(self.user_id, self.guild_id, value)
         if err:
             msgs = {
@@ -241,7 +263,7 @@ class BorrowModal(_AmountModal):
                 "no_treasury": "Crew treasury is missing — rejoin or ask an admin.",
                 "invalid_amount": "Enter a positive amount.",
             }
-            await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
+            await interaction.followup.send(msgs.get(err, err), ephemeral=True)
             return
         await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
 
@@ -255,6 +277,7 @@ class RepayModal(_AmountModal):
         if value is None:
             await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.repay_crew_loan(self.user_id, self.guild_id, value)
         if err:
             msgs = {
@@ -262,7 +285,7 @@ class RepayModal(_AmountModal):
                 "insufficient_funds": "Not enough nuggets in your wallet.",
                 "invalid_amount": "Enter a positive amount.",
             }
-            await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
+            await interaction.followup.send(msgs.get(err, err), ephemeral=True)
             return
         await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
 
@@ -420,7 +443,9 @@ class CrewPanelView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=0)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
-        await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
+        await refresh_crew_message(
+            interaction, self.cog, self.guild_id, self.user_id, defer_first=True,
+        )
 
     @discord.ui.button(label="Borrow", style=discord.ButtonStyle.primary, row=1)
     async def borrow_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -469,9 +494,10 @@ class CrewPanelView(discord.ui.View):
                 "Not enough nuggets in your pocket to repay.", ephemeral=True,
             )
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.repay_crew_loan(self.user_id, self.guild_id, pay)
         if err:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Could not repay loan. Try again.", ephemeral=True,
             )
             return
@@ -484,6 +510,7 @@ class CrewPanelView(discord.ui.View):
         if wallet <= 0:
             await interaction.response.send_message("Nothing in your pocket to deposit.", ephemeral=True)
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.deposit_crew_treasury(self.user_id, self.guild_id, wallet)
         if err:
             msgs = {
@@ -492,7 +519,7 @@ class CrewPanelView(discord.ui.View):
                 "invalid_amount": "Enter a positive amount.",
                 "treasury_error": "Could not update crew treasury. Try again.",
             }
-            await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
+            await interaction.followup.send(msgs.get(err, err), ephemeral=True)
             return
         await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
 
@@ -512,6 +539,7 @@ class CrewPanelView(discord.ui.View):
         if amount <= 0:
             await interaction.response.send_message("You have no crew deposits to withdraw.", ephemeral=True)
             return
+        await interaction.response.defer()
         err = await self.cog.bot.db.withdraw_crew_contribution(
             self.user_id, self.guild_id, amount,
         )
@@ -521,25 +549,28 @@ class CrewPanelView(discord.ui.View):
                 "insufficient_treasury": "Crew treasury is too low.",
                 "insufficient_funds": "Could not credit your wallet.",
             }
-            await interaction.response.send_message(msgs.get(err, err), ephemeral=True)
+            await interaction.followup.send(msgs.get(err, err), ephemeral=True)
             return
         await refresh_crew_message(interaction, self.cog, self.guild_id, self.user_id)
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, row=2)
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
+        await interaction.response.defer()
         result = await self.cog.bot.db.leave_crew(self.user_id, self.guild_id)
         if result == "active_loan":
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Repay your crew loan before leaving.", ephemeral=True,
             )
             return
         if result is not True:
-            await interaction.response.send_message("You are not in a crew.", ephemeral=True)
+            await interaction.followup.send(
+                "You are not in a crew.", ephemeral=True,
+            )
             return
         embed = build_no_crew_embed()
         view = await CrewJoinView.build(self.cog, self.guild_id, self.user_id)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="Leaderboard", style=discord.ButtonStyle.secondary, row=3)
     async def leaderboard_button(
@@ -659,7 +690,9 @@ async def send_crew_panel(interaction: discord.Interaction, cog: Crews) -> None:
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         return
 
-    embed, err = await build_crew_embed(cog, interaction.guild, interaction.user.id)
+    embed, err = await build_crew_embed(
+        cog, interaction.guild, interaction.user.id, snap=snap,
+    )
     if err or embed is None:
         await interaction.followup.send(err or "Could not load crew panel.", ephemeral=True)
         return

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
 import discord
@@ -487,17 +488,29 @@ class Shop(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
         target = user or interaction.user
-        await self.bot.db.sync_gear_instances_from_inventory(target.id, interaction.guild_id)
-        rows = await self.bot.db.get_inventory(target.id, interaction.guild_id)
-        equipment = await self.bot.db.get_equipment(target.id, interaction.guild_id)
+        guild_id = interaction.guild_id
+        await interaction.response.defer(ephemeral=True)
+
+        (
+            rows,
+            equipment,
+            loadout,
+            progress,
+            instances,
+            unstable,
+        ) = await asyncio.gather(
+            self.bot.db.get_inventory(target.id, guild_id),
+            self.bot.db.get_equipment(target.id, guild_id),
+            self.bot.db.get_combat_loadout(target.id, guild_id),
+            self.bot.db.get_user_progress(target.id, guild_id),
+            self.bot.db.list_gear_instances(target.id, guild_id),
+            self.bot.db.list_unstable_slots(target.id, guild_id),
+        )
         item_lines = [
             self._inventory_line(str(row["item_id"]), int(row["quantity"]), equipment)
             for row in rows
         ]
 
-        loadout = await self.bot.db.get_combat_loadout(target.id, interaction.guild_id)
-        unstable = await self.bot.db.list_unstable_slots(target.id, interaction.guild_id)
-        progress = await self.bot.db.get_user_progress(target.id, interaction.guild_id)
         set_bonus = detect_set_bonus(loadout.primary, loadout.armor)
         summary = format_combat_stats_block(
             compute_combat_stats(
@@ -517,7 +530,6 @@ class Shop(commands.Cog):
         if len(summary) > _EMBED_FIELD_MAX:
             summary = summary[: _EMBED_FIELD_MAX - 1] + "…"
 
-        instances = await self.bot.db.list_gear_instances(target.id, interaction.guild_id)
         instance_lines: list[str] = []
         if instances:
             from utils.enhancement import format_instance_label
@@ -574,7 +586,7 @@ class Shop(commands.Cog):
         embed.set_footer(
             text="/enhance · /equip-instance · /stats · /equip for quick slot equip",
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="equip",

@@ -8202,11 +8202,13 @@ class Database:
         crew_name = await self.get_crew_membership(user_id, guild_id)
         if crew_name is None:
             return None
-        stats = await self.get_crew_stats(guild_id, crew_name)
+        stats, contributed, loan = await asyncio.gather(
+            self.get_crew_stats(guild_id, crew_name),
+            self.get_crew_contributed(guild_id, crew_name, user_id),
+            self.get_active_crew_loan(user_id, guild_id),
+        )
         if stats is None:
             return None
-        contributed = await self.get_crew_contributed(guild_id, crew_name, user_id)
-        loan = await self.get_active_crew_loan(user_id, guild_id)
         return {
             "crew_name": crew_name,
             "treasury": float(stats["treasury"]),
