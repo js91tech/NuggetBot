@@ -470,6 +470,18 @@ TRAP_BOMB = ShopItem(
     "Stacks in inventory. Detonates for 75–125 true damage (ignores mitigation) when a duelist hits you.",
     shop_listed=True,
 )
+SAKUNAS_FINGER = ShopItem(
+    "sakunas_finger",
+    "Sakuna's Finger",
+    "consumable",
+    7_500_000,
+    0,
+    (
+        "Use with /use: for 6 hours, 75% chance to deflect incoming duel attacks. "
+        "On proc you auto-win and steal 5% of the attacker's wallet and 7% of their bank."
+    ),
+    shop_listed=True,
+)
 RAID_POTION = ShopItem(
     "raid_potion",
     "Raid Potion",
@@ -675,6 +687,7 @@ BOSS_ACCESSORY_POOL: tuple[str, ...] = tuple(item.id for item in ACCESSORIES)
 
 CONSUMABLES: tuple[ShopItem, ...] = (
     TRAP_BOMB,
+    SAKUNAS_FINGER,
     RAID_POTION,
     HP_POTION_SMALL,
     HP_POTION_MEDIUM,

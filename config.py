@@ -213,6 +213,13 @@ TRAP_BOMB_BASE_CHANCE = 0.08
 TRAP_BOMB_PER_ITEM_CHANCE = 0.05
 TRAP_BOMB_MAX_CHANCE = 0.75
 TRAP_BOMB_DAMAGE = (75, 125)
+
+SAKUNAS_FINGER_DEFLECT_CHANCE = 0.75
+SAKUNAS_FINGER_DURATION_SECONDS = 6 * 3600
+SAKUNAS_FINGER_WALLET_STEAL_FRACTION = 0.05
+SAKUNAS_FINGER_BANK_STEAL_FRACTION = 0.07
+# Optional hotlinked domain expansion GIF. Local assets/consumables/sakunas_finger.gif takes precedence.
+SAKUNAS_FINGER_GIF_URL = ""
 # Minimum spacing between automated channel posts (coin drops, boss embeds, etc.).
 DISCORD_OUTBOUND_MIN_INTERVAL_SEC = 1.25
 # Pause between guilds in background loops that may post to Discord.

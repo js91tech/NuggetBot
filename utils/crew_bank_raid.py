@@ -122,7 +122,8 @@ async def load_duel_fighter(
     attrs = await db.get_character_attributes(user_id, guild.id)
     attr_bonuses = combat_bonuses_from_attributes(attrs)
     trap_bombs = await db.get_inventory_quantity(user_id, guild.id, TRAP_BOMB_ITEM_ID)
-    return fighter_from_loadout(
+    sakuna_buff = await db.peek_active_sakuna_buff(user_id, guild.id)
+    fighter = fighter_from_loadout(
         user_id,
         display_name,
         loadout,
@@ -132,6 +133,9 @@ async def load_duel_fighter(
         attr_bonuses=attr_bonuses,
         trap_bomb_count=trap_bombs,
     )
+    if sakuna_buff is not None:
+        fighter.sakuna_deflect_active = True
+    return fighter
 
 
 def format_bout_summary(bout: CrewBankRaidBout, fighters: dict[int, DuelFighter]) -> str:

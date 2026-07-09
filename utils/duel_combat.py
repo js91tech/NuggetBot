@@ -41,6 +41,7 @@ class DuelFighter:
     trap_bomb_count: int = 0
     consumable_boost: float = 1.0
     consumable_boost_used: bool = False
+    sakuna_deflect_active: bool = False
     accessory_bonuses: AccessoryBonuses | None = None
 
 
@@ -54,6 +55,7 @@ class DuelStrike:
     verb: str
     defender_hp_after: int
     jester_reflect: bool = False
+    sakuna_deflect: bool = False
     trap_proc: TrapBombProc | None = None
     trap_attacker_hp_after: int | None = None
     second_wind: bool = False
@@ -201,6 +203,22 @@ def _one_strike(attacker: DuelFighter, defender: DuelFighter) -> DuelStrike:
             jester_reflect=True,
         )
 
+    if defender.sakuna_deflect_active:
+        from utils.sakunas_finger import roll_sakuna_deflect
+
+        if roll_sakuna_deflect():
+            attacker.hp = 0
+            return DuelStrike(
+                attacker_id=attacker.user_id,
+                defender_id=defender.user_id,
+                damage=0,
+                mitigated=0,
+                critical=False,
+                verb="is erased by Malevolent Shrine",
+                defender_hp_after=defender.hp,
+                sakuna_deflect=True,
+            )
+
     ctx = _attack_context(attacker, defender)
     damage_mult = ctx.damage_mult
     extra_crit = ctx.extra_crit
@@ -337,6 +355,12 @@ def format_strike_line(strike: DuelStrike, fighters: dict[int, DuelFighter]) -> 
         return (
             f"**{attacker.display_name}** attacks **{defender.display_name}** — "
             f"**who me?** The strike fails and **{attacker.display_name}** is instantly downed!"
+        )
+    if strike.sakuna_deflect:
+        return (
+            f"**{attacker.display_name}** attacks **{defender.display_name}** — "
+            f"**Domain Expansion: Malevolent Shrine!** **{attacker.display_name}** "
+            f"{strike.verb} and is instantly downed!"
         )
     crit = " **CRIT**" if strike.critical else ""
     mit = f" ({strike.mitigated} blocked)" if strike.mitigated else ""

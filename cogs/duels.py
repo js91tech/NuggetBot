@@ -7,6 +7,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from pathlib import Path
+
 import config
 from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.avatars import build_avatar_embed_files, get_avatar
@@ -21,6 +23,7 @@ from utils.helpers import clip_embed_field, fmt_amount, guild_only_message, send
 from utils.quests import record_quest_event
 from utils.skills import get_skill, spell_buff_from_skill
 from utils.spell_effects import combat_state_from_spell
+from utils.sakunas_finger import SAKUNAS_FINGER_GIF_PATH, sakuna_domain_art
 from utils.trap_bombs import TRAP_BOMB_GIF_PATH, TRAP_BOMB_ITEM_ID
 
 logger = logging.getLogger(__name__)
@@ -376,6 +379,7 @@ class Duels(commands.Cog):
         defender_bombs = await self.bot.db.get_inventory_quantity(
             opponent.id, guild_id, TRAP_BOMB_ITEM_ID
         )
+        defender_sakuna = await self.bot.db.peek_active_sakuna_buff(opponent.id, guild_id)
         initial_attacker_bombs = attacker_bombs
         initial_defender_bombs = defender_bombs
 
@@ -399,6 +403,8 @@ class Duels(commands.Cog):
             attr_bonuses=defender_attr_bonuses,
             trap_bomb_count=defender_bombs,
         )
+        if defender_sakuna is not None:
+            defender_fighter.sakuna_deflect_active = True
         drug_buff = await self.bot.db.peek_pending_drug_buff(attacker.id, guild_id)
         if drug_buff is not None and float(drug_buff["duel_mult"]) > 1.0:
             attacker_fighter.consumable_boost = max(
@@ -452,16 +458,29 @@ class Duels(commands.Cog):
                 opponent.id, guild_id, TRAP_BOMB_ITEM_ID
             )
 
-        settlement = await self.bot.db.execute_duel(
-            guild_id,
-            attacker.id,
-            opponent.id,
-            result.winner_id,
-            loss_fraction=loss_fraction,
-            same_target_cooldown_seconds=cooldown_seconds,
-            max_attacks_per_hour=max_per_hour,
-            skip_same_target_cooldown=skip_target_cd,
-        )
+        sakuna_procs = sum(1 for s in result.strikes if s.sakuna_deflect)
+        if sakuna_procs > 0:
+            settlement = await self.bot.db.execute_sakuna_duel(
+                guild_id,
+                attacker.id,
+                opponent.id,
+                wallet_fraction=config.SAKUNAS_FINGER_WALLET_STEAL_FRACTION,
+                bank_fraction=config.SAKUNAS_FINGER_BANK_STEAL_FRACTION,
+                same_target_cooldown_seconds=cooldown_seconds,
+                max_attacks_per_hour=max_per_hour,
+                skip_same_target_cooldown=skip_target_cd,
+            )
+        else:
+            settlement = await self.bot.db.execute_duel(
+                guild_id,
+                attacker.id,
+                opponent.id,
+                result.winner_id,
+                loss_fraction=loss_fraction,
+                same_target_cooldown_seconds=cooldown_seconds,
+                max_attacks_per_hour=max_per_hour,
+                skip_same_target_cooldown=skip_target_cd,
+            )
         if settlement is None:
             await interaction.followup.send(
                 "Duel blocked by cooldown limits. Please try again.",
@@ -486,7 +505,13 @@ class Duels(commands.Cog):
                     f"**who me?** <@{jester_id}> pockets **{fmt_amount(steal)}** from <@{victim_id}>!"
                 )
 
-        loot, _ = settlement
+        wallet_loot = 0.0
+        bank_loot = 0.0
+        if sakuna_procs > 0:
+            wallet_loot, bank_loot, _ = settlement  # type: ignore[misc]
+            loot = wallet_loot + bank_loot
+        else:
+            loot, _ = settlement  # type: ignore[misc]
         winner = attacker if result.winner_id == attacker.id else opponent
         loser = opponent if result.winner_id == attacker.id else attacker
         plunder_note = ""
@@ -509,6 +534,18 @@ class Duels(commands.Cog):
                         f"\n**Plunderer's Seal** — **+{fmt_amount(extra)}** bonus loot!"
                     )
         loss_pct = int(round(loss_fraction * 100))
+        loot_note = (
+            f"**{fmt_amount(loot)}** ({loss_pct}% of {loser.display_name}'s wallet) "
+            f"transferred to the winner."
+        )
+        if sakuna_procs > 0:
+            wallet_pct = int(round(config.SAKUNAS_FINGER_WALLET_STEAL_FRACTION * 100))
+            bank_pct = int(round(config.SAKUNAS_FINGER_BANK_STEAL_FRACTION * 100))
+            loot_note = (
+                f"**Domain Expansion** — **{fmt_amount(wallet_loot)}** ({wallet_pct}% wallet) "
+                f"+ **{fmt_amount(bank_loot)}** ({bank_pct}% bank) seized from "
+                f"**{loser.display_name}**."
+            )
 
         log_lines = [format_strike_line(s, fighters) for s in result.strikes[:12]]
         if len(result.strikes) > 12:
@@ -518,8 +555,7 @@ class Duels(commands.Cog):
             title="Duel resolved",
             description=(
                 f"**{winner.display_name}** defeats **{loser.display_name}**!\n"
-                f"**{fmt_amount(loot)}** ({loss_pct}% of {loser.display_name}'s wallet) "
-                f"transferred to the winner.{plunder_note}{withdrawal_note}"
+                f"{loot_note}{plunder_note}{withdrawal_note}"
             ),
             color=discord.Color.red() if result.winner_id == attacker.id else discord.Color.blue(),
         )
@@ -552,6 +588,8 @@ class Duels(commands.Cog):
         ]
         if trap_procs > 0:
             footer_bits.append(f"{trap_procs} trap bomb(s) detonated")
+        if sakuna_procs > 0:
+            footer_bits.append("Sakuna's Finger deflected the attack")
         embed.set_footer(text=" · ".join(footer_bits))
 
         winner_avatar_id = await self.bot.db.get_equipped_avatar_id(
@@ -581,7 +619,14 @@ class Duels(commands.Cog):
                 embed.set_thumbnail(url=f"attachment://{portrait_name}")
         except Exception:
             logger.exception("Failed to attach winner avatar art for duel embed")
-        if trap_procs > 0 and TRAP_BOMB_GIF_PATH.is_file() and not victory_name:
+        if sakuna_procs > 0:
+            art = sakuna_domain_art()
+            if isinstance(art, Path) and art.is_file():
+                files.append(discord.File(str(art), filename="sakunas_finger.gif"))
+                embed.set_image(url="attachment://sakunas_finger.gif")
+            elif isinstance(art, str):
+                embed.set_image(url=art)
+        elif trap_procs > 0 and TRAP_BOMB_GIF_PATH.is_file() and not victory_name:
             files.append(discord.File(str(TRAP_BOMB_GIF_PATH), filename="trap_bomb.gif"))
             embed.set_image(url="attachment://trap_bomb.gif")
 

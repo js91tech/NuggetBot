@@ -129,6 +129,16 @@ async def execute_use(
             f"**{shop_item.name}** — restored HP to **{int(new_hp)}/{int(max_hp)}**."
         )
 
+    if item_id == "sakunas_finger":
+        if not await cog.bot.db.consume_inventory_item(user_id, guild_id, item_id):
+            return "consume_failed", None
+        expires = await cog.bot.db.set_active_sakuna_buff(user_id, guild_id)
+        chance_pct = int(round(config.SAKUNAS_FINGER_DEFLECT_CHANCE * 100))
+        return None, (
+            f"**{shop_item.name}** — domain ward active until "
+            f"<t:{int(expires)}:R>. **{chance_pct}%** chance to deflect incoming duel attacks."
+        )
+
     if item_id in {"jail_key", "pick_key"}:
         if not await cog.bot.db.is_arrested(user_id, guild_id):
             return "not_jailed", None
@@ -189,6 +199,21 @@ async def build_use_embed(cog: commands.Cog, user_id: int, guild_id: int) -> dis
         embed.add_field(
             name="Active drug high",
             value=f"**{pending['name']}** — expires <t:{int(float(pending['expires']))}:R>",
+            inline=False,
+        )
+    try:
+        sakuna = await cog.bot.db.peek_active_sakuna_buff(user_id, guild_id)
+    except Exception:
+        logger.exception("Failed to read Sakuna buff for /use panel")
+        sakuna = None
+    if sakuna:
+        chance_pct = int(round(config.SAKUNAS_FINGER_DEFLECT_CHANCE * 100))
+        embed.add_field(
+            name="Sakuna's Finger ward",
+            value=(
+                f"**{chance_pct}%** deflect chance on incoming duels — expires "
+                f"<t:{int(float(sakuna['expires']))}:R>"
+            ),
             inline=False,
         )
     embed.set_footer(text="Raid potions buff your next boss attack · drugs have timed effects")

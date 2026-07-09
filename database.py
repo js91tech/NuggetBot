@@ -512,6 +512,7 @@ class Database:
         await self._migrate_mega_projects()
         await self._migrate_drug_trade()
         await self._migrate_active_drug_buff()
+        await self._migrate_sakuna_buff()
         await self._migrate_drug_grow_fertilizer()
         await self._migrate_empire_expansion()
         await self._migrate_drug_harvest_reputation()
@@ -1599,6 +1600,33 @@ class Database:
             """,
             (prefix,),
         )
+        await self.conn.commit()
+
+    async def _migrate_sakuna_buff(self) -> None:
+        """Timed Sakuna's Finger duel deflect buff."""
+        cols = [("active_sakuna_buff_expires", "REAL")]
+        if self.is_postgres:
+            for col, typedef in cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'user_character' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_character ADD COLUMN {col} {typedef}",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(user_character)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE user_character ADD COLUMN {col} {typedef}",
+                    )
         await self.conn.commit()
 
     async def _migrate_drug_grow_fertilizer(self) -> None:
@@ -7839,6 +7867,221 @@ class Database:
             final = await cursor.fetchone()
             final_wallet = float(final["wallet"]) if final is not None else 0.0
             return loot, final_wallet
+
+    async def set_active_sakuna_buff(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        duration_seconds: float | None = None,
+    ) -> float:
+        import config
+
+        now = time.time()
+        duration = (
+            float(config.SAKUNAS_FINGER_DURATION_SECONDS)
+            if duration_seconds is None
+            else float(duration_seconds)
+        )
+        expires = now + duration
+        async with self._write_lock:
+            await self._ensure_character_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                UPDATE user_character
+                SET active_sakuna_buff_expires = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (expires, user_id, guild_id),
+            )
+            await self.conn.commit()
+        return expires
+
+    async def _clear_expired_sakuna_buff(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        now: float | None = None,
+    ) -> None:
+        ts = time.time() if now is None else now
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                SELECT active_sakuna_buff_expires
+                FROM user_character
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (user_id, guild_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return
+            expires = float(row["active_sakuna_buff_expires"] or 0)
+            if expires <= 0 or expires >= ts:
+                return
+            await self.conn.execute(
+                """
+                UPDATE user_character
+                SET active_sakuna_buff_expires = NULL
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (user_id, guild_id),
+            )
+            await self.conn.commit()
+
+    async def peek_active_sakuna_buff(
+        self,
+        user_id: int,
+        guild_id: int,
+    ) -> dict[str, float] | None:
+        now = time.time()
+        await self._clear_expired_sakuna_buff(user_id, guild_id, now=now)
+        cursor = await self.conn.execute(
+            """
+            SELECT active_sakuna_buff_expires
+            FROM user_character
+            WHERE user_id = ? AND guild_id = ?
+            """,
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        expires = float(row["active_sakuna_buff_expires"] or 0)
+        if expires <= now:
+            return None
+        return {"expires": expires}
+
+    async def execute_sakuna_duel(
+        self,
+        guild_id: int,
+        attacker_id: int,
+        defender_id: int,
+        *,
+        wallet_fraction: float,
+        bank_fraction: float,
+        same_target_cooldown_seconds: float,
+        max_attacks_per_hour: int,
+        timestamp: float | None = None,
+        skip_same_target_cooldown: bool = False,
+    ) -> tuple[float, float, float] | None:
+        """Record duel where defender auto-won via Sakuna deflect; steal wallet + bank."""
+        winner_id = defender_id
+        loser_id = attacker_id
+        now = time.time() if timestamp is None else timestamp
+
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                await self._ensure_user_no_lock(attacker_id, guild_id)
+                await self._ensure_user_no_lock(defender_id, guild_id)
+
+                cursor = await self.conn.execute(
+                    """
+                    SELECT MAX(created_at) AS last_at
+                    FROM duel_history
+                    WHERE guild_id = ? AND attacker_id = ? AND defender_id = ?
+                    """,
+                    (guild_id, attacker_id, defender_id),
+                )
+                row = await cursor.fetchone()
+                if (
+                    not skip_same_target_cooldown
+                    and row is not None
+                    and row["last_at"] is not None
+                ):
+                    remaining = (float(row["last_at"]) + same_target_cooldown_seconds) - now
+                    if remaining > 0:
+                        await self.conn.rollback()
+                        return None
+
+                cursor = await self.conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM duel_history
+                    WHERE guild_id = ? AND attacker_id = ? AND created_at > ?
+                    """,
+                    (guild_id, attacker_id, now - 3600),
+                )
+                count_row = await cursor.fetchone()
+                if count_row is not None and int(count_row["cnt"]) >= max_attacks_per_hour:
+                    await self.conn.rollback()
+                    return None
+
+                cursor = await self.conn.execute(
+                    "SELECT wallet, bank FROM users WHERE user_id = ? AND guild_id = ?",
+                    (loser_id, guild_id),
+                )
+                loser_row = await cursor.fetchone()
+                if loser_row is None:
+                    await self.conn.rollback()
+                    return None
+                loser_wallet = float(loser_row["wallet"])
+                loser_bank = float(loser_row["bank"])
+                wallet_loot = min(loser_wallet, max(0.0, loser_wallet * wallet_fraction))
+                bank_loot = min(loser_bank, max(0.0, loser_bank * bank_fraction))
+                total_loot = wallet_loot + bank_loot
+
+                if wallet_loot > 0:
+                    await self.conn.execute(
+                        """
+                        UPDATE users
+                        SET wallet = wallet - ?
+                        WHERE user_id = ? AND guild_id = ?
+                        """,
+                        (wallet_loot, loser_id, guild_id),
+                    )
+                if bank_loot > 0:
+                    await self.conn.execute(
+                        """
+                        UPDATE users
+                        SET bank = bank - ?
+                        WHERE user_id = ? AND guild_id = ?
+                        """,
+                        (bank_loot, loser_id, guild_id),
+                    )
+                if total_loot > 0:
+                    await self.conn.execute(
+                        """
+                        UPDATE users
+                        SET wallet = wallet + ?,
+                            total_earned = total_earned + ?
+                        WHERE user_id = ? AND guild_id = ?
+                        """,
+                        (total_loot, total_loot, winner_id, guild_id),
+                    )
+
+                await self.conn.execute(
+                    """
+                    INSERT INTO duel_history (
+                        guild_id, attacker_id, defender_id, winner_id, loot_amount, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (guild_id, attacker_id, defender_id, winner_id, total_loot, now),
+                )
+                await self._apply_duel_elo_no_lock(
+                    guild_id, winner_id, loser_id,
+                )
+                await self._ensure_progress_no_lock(winner_id, guild_id)
+                await self.conn.execute(
+                    """
+                    UPDATE user_progress SET duel_wins = duel_wins + 1
+                    WHERE user_id = ? AND guild_id = ?
+                    """,
+                    (winner_id, guild_id),
+                )
+            except Exception:
+                await self.conn.rollback()
+                raise
+            await self.conn.commit()
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (loser_id, guild_id),
+            )
+            final = await cursor.fetchone()
+            final_wallet = float(final["wallet"]) if final is not None else 0.0
+            return wallet_loot, bank_loot, final_wallet
 
     async def _apply_duel_elo_no_lock(
         self,
