@@ -49,6 +49,8 @@ from utils.character_attributes import (
 )
 from utils.boss_mechanics import (
     boss_raid_damage_bonus,
+    business_boss_reward_mult,
+    clamp_boss_personal_reward_mult,
     compute_boss_hp,
     raider_damage_mult,
     reward_mult_for_variant,
@@ -659,10 +661,28 @@ class Boss(commands.Cog):
         reward_lines = []
         for row in rows:
             user_id = int(row["user_id"])
-            reward = max_hp * reward_mult * (float(row["damage"]) / total_damage)
-            await self.bot.db.credit_wallet(user_id, guild_id, reward)
+            base_share = max_hp * reward_mult * (float(row["damage"]) / total_damage)
+            income_mult = await self.bot.db.get_income_multiplier(user_id, guild_id)
+            business = await self.bot.db.get_business(user_id, guild_id)
+            if business is None:
+                business_mult = business_boss_reward_mult()
+            else:
+                business_mult = business_boss_reward_mult(
+                    int(business["tier"]),
+                    int(business["business_prestige"]),
+                )
+            personal_mult = clamp_boss_personal_reward_mult(income_mult, business_mult)
+            reward = base_share * personal_mult
+            await self.bot.db.credit_wallet(
+                user_id, guild_id, reward, apply_bonuses=False,
+            )
             name = self._display_name(guild, user_id)
-            reward_lines.append(f"{name}: {fmt_amount(reward)}")
+            if personal_mult > 1.0 + 1e-9:
+                reward_lines.append(
+                    f"{name}: {fmt_amount(reward)} (×{personal_mult:.2f})"
+                )
+            else:
+                reward_lines.append(f"{name}: {fmt_amount(reward)}")
 
         loot_rows = await self._roll_boss_loot(guild_id, rows)
         loot_rows.extend(await self._roll_mythic_loot(guild_id, rows, variant))

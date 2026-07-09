@@ -259,6 +259,10 @@ BOSS_REWARD_MULT_BY_THREAT: dict[int, float] = {
     5: 2.0,
     6: 3.5,
 }
+# Personal boss nugget slice: income_mult × business bonus, soft-capped.
+BOSS_REWARD_BUSINESS_TIER_BONUS = 0.02
+BOSS_REWARD_BUSINESS_PRESTIGE_BONUS = 0.015
+BOSS_REWARD_PERSONAL_MULT_CAP = 1.50
 BOSS_ULTRA_DROP_CHANCE = 0.05
 BOSS_NAME_ZZ_WRATH = "ZZ's Wrath"
 AUTO_POTION_THRESHOLDS: tuple[int, ...] = (25, 40, 50, 60, 75)

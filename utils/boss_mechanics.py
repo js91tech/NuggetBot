@@ -60,6 +60,28 @@ def reward_mult_for_variant(variant: str) -> float:
     return config.BOSS_REWARD_MULT_BY_THREAT.get(threat, 1.0)
 
 
+def business_boss_reward_mult(
+    tier: int | None = None,
+    business_prestige: int | None = None,
+) -> float:
+    """Personal business bonus on boss nugget slices. No business → 1.0."""
+    if tier is None:
+        return 1.0
+    safe_tier = max(1, int(tier))
+    safe_prestige = max(0, int(business_prestige or 0))
+    return (
+        1.0
+        + config.BOSS_REWARD_BUSINESS_TIER_BONUS * max(0, safe_tier - 1)
+        + config.BOSS_REWARD_BUSINESS_PRESTIGE_BONUS * safe_prestige
+    )
+
+
+def clamp_boss_personal_reward_mult(income_mult: float, business_mult: float) -> float:
+    """Combine income + business mults and soft-cap the personal boss payout."""
+    combined = max(0.0, float(income_mult)) * max(0.0, float(business_mult))
+    return min(config.BOSS_REWARD_PERSONAL_MULT_CAP, combined)
+
+
 def raider_damage_mult(distinct_raiders: int) -> float:
     if distinct_raiders >= 4:
         return 1.0
