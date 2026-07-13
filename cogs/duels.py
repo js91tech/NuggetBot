@@ -21,6 +21,8 @@ from utils.duel_combat import (
 )
 from utils.helpers import clip_embed_field, fmt_amount, guild_only_message, send_error
 from utils.quests import record_quest_event
+from utils.expansion_events import record_expansion_event
+from utils.expansion_loot import award_duel_season_tokens
 from utils.skills import get_skill, spell_buff_from_skill
 from utils.spell_effects import combat_state_from_spell
 from utils.sakunas_finger import SAKUNAS_FINGER_GIF_PATH, sakuna_domain_art
@@ -639,6 +641,10 @@ class Duels(commands.Cog):
             view=rematch_view,
         )
         await record_quest_event(self.bot.db, guild_id, result.winner_id, "duel_win")
+        await record_expansion_event(self.bot.db, guild_id, result.winner_id, "duel_win")
+        await award_duel_season_tokens(
+            self.bot.db, guild_id, result.winner_id, result.loser_id,
+        )
         unlocked = await evaluate_unlocks(self.bot.db, guild_id, result.winner_id)
         if unlocked:
             msg = format_unlock_message(unlocked)

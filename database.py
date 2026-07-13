@@ -14,6 +14,7 @@ import aiosqlite
 import asyncpg
 
 import config
+from database_expansion import DatabaseExpansionMixin
 
 
 class DailyClaimResult(NamedTuple):
@@ -204,7 +205,7 @@ class PostgresConnection:
         return sql
 
 
-class Database:
+class Database(DatabaseExpansionMixin):
     def __init__(self, path: str) -> None:
         self.path = path
         self.urls = self._postgres_urls()
@@ -518,6 +519,7 @@ class Database:
         await self._migrate_drug_harvest_reputation()
         await self._migrate_tier1_retention()
         await self._migrate_loadout_preset_accessories()
+        await self._migrate_gameplay_expansion()
 
     async def _migrate_tier1_retention(self) -> None:
         """Daily streaks, activity XP, trades, weekly stats, notification prefs."""

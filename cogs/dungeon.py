@@ -24,6 +24,7 @@ from utils.dungeon_ui import DungeonActionResult, send_dungeon_panel
 from utils.energy import format_energy_display
 from utils.helpers import fmt_amount, guild_only_message
 from utils.quests import record_quest_event
+from utils.expansion_loot import on_dungeon_clear
 from utils.stats import hp_bar
 
 
@@ -58,7 +59,14 @@ class Dungeon(commands.Cog):
         item = get_item(accessory_id)
         if item is None:
             return None
-        await self.bot.db.grant_item(user_id, guild_id, accessory_id)
+        instance_id = await self.bot.db.grant_item(user_id, guild_id, accessory_id)
+        if instance_id is not None:
+            from utils.affixes import current_delve_week_id
+
+            week = current_delve_week_id()
+            await self.bot.db.roll_gear_affixes(
+                instance_id, delve_bonus=week in ("cursed_depths", "blood_pact"),
+            )
         return item.name
 
     async def _maybe_roll_vault_hardener(self, user_id: int, guild_id: int, tier_id: str) -> str | None:
@@ -353,6 +361,9 @@ class Dungeon(commands.Cog):
                 user_id, guild_id, dungeons_cleared=1,
             )
             await record_quest_event(self.bot.db, guild_id, user_id, "dungeon_clear")
+            await on_dungeon_clear(
+                self.bot.db, guild_id, user_id, tier_id=tier.tier_id,
+            )
             for _ in range(tier.scrap_per_clear):
                 await self.bot.db.grant_item(user_id, guild_id, "alchemy_scrap")
             accessory_name = await self._maybe_roll_accessory_drop(

@@ -67,6 +67,8 @@ from utils.gear_sets import SetBonus, detect_set_bonus
 from utils.helpers import fmt_amount, guild_only_message, resolve_bot_announcement_channel
 from utils.loadout import PlayerLoadout, off_hand_crit_bonus, off_hand_power_bonus
 from utils.quests import record_quest_event
+from utils.expansion_events import record_expansion_event
+from utils.expansion_loot import roll_boss_expansion_loot
 from utils.skills import get_skill, spell_buff_from_skill
 from utils.spell_effects import combat_state_from_spell
 from utils.stats import hp_bar
@@ -691,6 +693,10 @@ class Boss(commands.Cog):
         if variant == "zz_wrath":
             loot_rows.extend(await self._roll_ultra_loot(guild_id, rows))
         aspect_rows = await self._roll_aspect_loot(guild_id, rows, variant)
+        contributor_ids = [int(row["user_id"]) for row in rows]
+        exp_lines = await roll_boss_expansion_loot(
+            self.bot.db, guild_id, contributor_ids, variant=variant,
+        )
         gear_lines = [
             f"**{self._display_name(guild, uid)}** · **{item.name}** (`{item.id}`)"
             for uid, item in loot_rows
@@ -703,10 +709,10 @@ class Boss(commands.Cog):
             f"**{self._display_name(guild, uid)}** · Aspect {label}"
             for uid, label in aspect_rows
         )
+        gear_lines.extend(exp_lines)
 
         await self.bot.db.clear_boss(guild_id)
 
-        contributor_ids = [int(row["user_id"]) for row in rows]
         stash_lines: list[str] = []
         if variant == "freaky_nikki":
             stash_lines = await self._grant_freaky_nikki_bonuses(
@@ -1406,6 +1412,10 @@ class Boss(commands.Cog):
             return BossAttackResult(error="No boss is active right now.")
 
         await record_quest_event(self.bot.db, guild_id, member.id, "boss_attack")
+        await record_expansion_event(self.bot.db, guild_id, member.id, "boss_attack")
+        await record_expansion_event(
+            self.bot.db, guild_id, member.id, "boss_damage", amount=damage,
+        )
 
         if float(updated["hp"]) <= 0:
             await self._complete_boss_defeat(

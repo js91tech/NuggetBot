@@ -593,6 +593,16 @@ class DrugLabView(discord.ui.View):
                 await record_quest_event(
                     self.cog.bot.db, self.guild_id, self.user_id, "drug_harvest",
                 )
+                import random
+                from utils.expansion_events import record_expansion_event
+
+                await record_expansion_event(
+                    self.cog.bot.db, self.guild_id, self.user_id, "drug_harvest",
+                )
+                if random.random() < 0.35:
+                    await self.cog.bot.db.grant_item(
+                        self.user_id, self.guild_id, "harvest_resin",
+                    )
                 from utils.achievements import ACHIEVEMENTS, evaluate_unlocks, format_unlock_message
 
                 ach_msg = ""

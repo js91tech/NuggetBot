@@ -10,7 +10,9 @@ from discord.ext import commands, tasks
 
 import config
 from utils.achievements import evaluate_unlocks, format_unlock_message
+from utils.expansion_events import record_expansion_event
 from utils.helpers import fmt_amount, guild_only_message, resolve_main_channel, send_error
+from utils.quests import record_quest_event
 from utils.territory_ui import send_territory_map_panel
 from utils.territories import (
     TERRITORY_MAP,
@@ -554,6 +556,19 @@ class Territories(commands.Cog):
                         int(attacker_uid),
                         "territory_claim",
                     )
+                    await record_expansion_event(
+                        self.bot.db, guild.id, int(attacker_uid), "territory_siege",
+                    )
+                    crew_id = await self.bot.db.get_user_crew_id(int(attacker_uid), guild.id)
+                    if crew_id is not None:
+                        zone = str(item.get("territory_id", "docks"))
+                        await self.bot.db.unlock_territory_cosmetic(
+                            guild.id, crew_id, zone, f"banner_{zone}",
+                        )
+                        if zone == "citadel":
+                            await self.bot.db.unlock_crew_legacy(
+                                guild.id, crew_id, "citadel_holder",
+                            )
                     unlocked = await evaluate_unlocks(
                         self.bot.db, guild.id, int(attacker_uid),
                     )

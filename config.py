@@ -831,6 +831,36 @@ ENERGY_REGEN_INTERVAL_SECONDS = 5 * 60
 ENERGY_REGEN_PER_TICK = 5
 ENERGY_WORK_COST_DEFAULT = 10
 
+# --- Gameplay expansion (relics, companions, contracts, museum, expeditions) ---
+PASSIVE_BONUS_CAP = 0.15
+RELIC_MAX_EQUIP = 1
+COMPANION_MAX_EQUIP = 1
+COMPANION_DROP_CHANCE = 0.12
+RELIC_BOSS_DROP_CHANCE = 0.06
+RELIC_VAULT_DROP_CHANCE = 0.10
+GEAR_AFFIX_DUNGEON_CHANCE = 0.65
+SEASON_TOKEN_WIN = 10
+SEASON_TOKEN_LOSS = 3
+SEASON_TOKEN_SHOP: dict[str, tuple[int, str]] = {
+    "title_raider": (50, "title"),
+    "avatar_season_gold": (120, "avatar"),
+    "aspect_season_plunder": (200, "aspect"),
+    "relic_plunder_seal": (300, "relic"),
+}
+CONTRACT_REFRESH_SECONDS = 6 * 3600
+DELVE_WEEK_SECONDS = 7 * 24 * 3600
+DELVE_WEEK_ROTATION: tuple[str, ...] = ("cursed_depths", "merchants_run", "blood_pact")
+EXPEDITION_INTERVAL_SECONDS = 72 * 3600
+EXPEDITION_AUTO_SPAWN = True
+EXPEDITION_MIN_ACTIVE_PLAYERS = 3
+PHENOTYPE_CROSSBREED_CHANCE = 0.08
+CREW_LEGACY_HOLD_DAYS = 30
+CREW_LEGACY_INCOME_BONUS = 0.01
+TERRITORY_COSMETIC_SIEGE_WINS = 3
+EXPEDITION_INCOME_BUFF = 1.10
+EXPEDITION_INCOME_BUFF_HOURS = 24.0
+EXPEDITION_CONTRIBUTOR_TOKEN_REWARD = 15
+
 SEASONAL_EVENT_TYPES: tuple[str, ...] = (
     "double_drops",
     "bonus_income",

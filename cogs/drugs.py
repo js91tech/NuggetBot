@@ -266,6 +266,66 @@ class Drugs(commands.Cog):
             embed.set_footer(text=f"{max(0, nxt - rep):,} rep to rank {rank + 1}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @drugs_group.command(
+        name="crossbreed",
+        description="Crossbreed two harvested strains for a rare phenotype.",
+    )
+    @app_commands.describe(strain_a="First strain", strain_b="Second strain")
+    @app_commands.autocomplete(strain_a=drug_autocomplete, strain_b=drug_autocomplete)
+    async def crossbreed(
+        self,
+        interaction: discord.Interaction,
+        strain_a: str,
+        strain_b: str,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if strain_a == strain_b:
+            await interaction.response.send_message("Pick two different strains.", ephemeral=True)
+            return
+        uid = interaction.user.id
+        gid = interaction.guild_id
+        for drug_id in (strain_a, strain_b):
+            inv = await self.bot.db.get_drug_inventory(uid, gid)
+            if inv.get(drug_id, 0) < 1:
+                await interaction.response.send_message(
+                    f"You need at least 1 unit of `{drug_id}` in stash.", ephemeral=True,
+                )
+                return
+        if not await self.bot.db.spend_drug_units(uid, gid, strain_a, 1):
+            await interaction.response.send_message("Could not spend first strain.", ephemeral=True)
+            return
+        if not await self.bot.db.spend_drug_units(uid, gid, strain_b, 1):
+            await self.bot.db.grant_drug_units(uid, gid, strain_a, 1)
+            await interaction.response.send_message("Could not spend second strain.", ephemeral=True)
+            return
+        from utils.expansion_events import record_expansion_event
+        from utils.phenotypes import drug_family, phenotype_buff_description, roll_crossbreed
+
+        fam_a, fam_b = drug_family(strain_a), drug_family(strain_b)
+        pheno = roll_crossbreed(fam_a, fam_b)
+        await record_expansion_event(self.bot.db, gid, uid, "drug_crossbreed")
+        if pheno is None:
+            await interaction.response.send_message(
+                "Crossbreed failed — the strains didn't take. Try again with a **Phenotype Catalyst** "
+                "in inventory for better odds (coming soon) or different parents.",
+                ephemeral=True,
+            )
+            return
+        new = await self.bot.db.discover_phenotype(uid, gid, pheno.phenotype_id)
+        await self.bot.db.set_active_phenotype(uid, gid, pheno.phenotype_id)
+        await record_expansion_event(self.bot.db, gid, uid, "phenotype_discovered")
+        await self.bot.db.increment_museum_category(gid, uid, "phenotypes", 1)
+        await self.bot.db.increment_museum_category(gid, uid, "strains", 1)
+        status = "Discovered" if new else "Already known — activated"
+        await interaction.response.send_message(
+            f"{pheno.emoji} **{pheno.name}** — {status}!\n"
+            f"_{pheno.description}_\n"
+            f"Buff: {phenotype_buff_description(pheno.buff_effect)}",
+            ephemeral=True,
+        )
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Drugs(bot))

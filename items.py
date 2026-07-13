@@ -613,6 +613,97 @@ CELESTIAL_SHARD = ShopItem(
     shop_listed=False,
 )
 
+DUNGEON_ESSENCE = ShopItem(
+    "dungeon_essence",
+    "Dungeon Essence",
+    "consumable",
+    0,
+    0,
+    "Alchemy ingredient from delves.",
+    shop_listed=False,
+)
+HARVEST_RESIN = ShopItem(
+    "harvest_resin",
+    "Harvest Resin",
+    "consumable",
+    0,
+    0,
+    "Sticky lab byproduct for advanced recipes.",
+    shop_listed=False,
+)
+BUSINESS_WASTE = ShopItem(
+    "business_waste",
+    "Business Waste",
+    "consumable",
+    0,
+    0,
+    "Recycled empire scrap for alchemy.",
+    shop_listed=False,
+)
+PHENOTYPE_CATALYST = ShopItem(
+    "phenotype_catalyst",
+    "Phenotype Catalyst",
+    "consumable",
+    0,
+    0,
+    "Boosts crossbreeding success.",
+    shop_listed=False,
+)
+FLASK_OF_ENRAGE = ShopItem(
+    "flask_enrage",
+    "Flask of Enrage",
+    "consumable",
+    0,
+    0,
+    "Next boss hit +25% damage but you take +10% counter damage.",
+    shop_listed=False,
+)
+SMUGGLERS_SATCHEL = ShopItem(
+    "smugglers_satchel",
+    "Smuggler's Satchel",
+    "consumable",
+    0,
+    0,
+    "Next street sell has zero raid risk.",
+    shop_listed=False,
+)
+DUELIST_ANTIDOTE = ShopItem(
+    "duelist_antidote",
+    "Duelist's Antidote",
+    "consumable",
+    0,
+    0,
+    "Removes one duel debuff on use.",
+    shop_listed=False,
+)
+RAID_ELIXIR = ShopItem(
+    "raid_elixir",
+    "Raid Elixir",
+    "consumable",
+    0,
+    0,
+    "Next boss hit +35% damage (craft-only).",
+    shop_listed=False,
+)
+ENERGY_SURGE = ShopItem(
+    "energy_surge",
+    "Energy Surge",
+    "consumable",
+    0,
+    0,
+    "Restores 30 job energy instantly.",
+    shop_listed=False,
+)
+TRAP_CLUSTER = ShopItem(
+    "trap_cluster",
+    "Trap Cluster",
+    "consumable",
+    0,
+    0,
+    "Duel trap: 2× proc chance for one fight.",
+    shop_listed=False,
+)
+
 ACCESSORIES: tuple[ShopItem, ...] = (
     ShopItem(
         "rust_band",
@@ -702,6 +793,16 @@ CONSUMABLES: tuple[ShopItem, ...] = (
     ALCHEMY_SCRAP,
     VOID_HARDENER,
     CELESTIAL_SHARD,
+    DUNGEON_ESSENCE,
+    HARVEST_RESIN,
+    BUSINESS_WASTE,
+    PHENOTYPE_CATALYST,
+    FLASK_OF_ENRAGE,
+    SMUGGLERS_SATCHEL,
+    DUELIST_ANTIDOTE,
+    RAID_ELIXIR,
+    ENERGY_SURGE,
+    TRAP_CLUSTER,
 )
 
 HP_POTION_HEAL: dict[str, int] = {

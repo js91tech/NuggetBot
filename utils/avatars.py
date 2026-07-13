@@ -61,6 +61,13 @@ AVATARS: tuple[AvatarDef, ...] = (
         10_000.0,
         "🏆",
     ),
+    AvatarDef(
+        "season_gold",
+        "Season Gold",
+        "Ranked season exclusive — redeem via /season shop.",
+        0.0,
+        "🥇",
+    ),
 )
 
 AVATAR_MAP: dict[str, AvatarDef] = {a.id: a for a in AVATARS}
