@@ -139,29 +139,26 @@ class SilentPowerAndPriceTests(unittest.TestCase):
         self.assertEqual(get_item("pick_key").price, 4_500_000)
 
     def test_silent_power_helpers(self) -> None:
+        from unittest.mock import patch
+
         from utils.classes import silent_power_damage_mult, silent_power_defense_mult
         from utils.combat_engine import AttackContext
 
         self.assertEqual(silent_power_damage_mult(config.SILENT_POWER_USER_ID), 1.15)
         self.assertEqual(silent_power_defense_mult(config.SILENT_POWER_USER_ID), 1.15)
         self.assertEqual(silent_power_damage_mult(1), 1.0)
-        # Force non-crit ceiling comparison via damage_mult alone.
+        # Deterministic ceiling check: randint returns the high bound.
         ctx = AttackContext(damage_mult=1.0, extra_crit=-1.0)
-        plain = [
-            roll_player_damage(None, ctx=ctx)[0]
-            for _ in range(30)
-        ]
-        buffed = [
-            roll_player_damage(
+        plain_high = int(config.BOSS_UNARMED_MAX)
+        buffed_high = int(config.BOSS_UNARMED_MAX * config.SILENT_POWER_DAMAGE_MULT)
+        with patch("utils.combat_engine.random.randint", side_effect=lambda a, b: b):
+            plain = roll_player_damage(None, ctx=ctx)[0]
+            buffed = roll_player_damage(
                 None, ctx=ctx, attacker_id=config.SILENT_POWER_USER_ID,
             )[0]
-            for _ in range(30)
-        ]
-        self.assertLessEqual(max(plain), int(config.BOSS_UNARMED_MAX))
-        self.assertGreaterEqual(
-            max(buffed),
-            int(config.BOSS_UNARMED_MAX * config.SILENT_POWER_DAMAGE_MULT),
-        )
+        self.assertEqual(plain, plain_high)
+        self.assertEqual(buffed, buffed_high)
+        self.assertGreater(buffed_high, plain_high)
 
     def test_silent_power_defense(self) -> None:
         class FakeArmor:
