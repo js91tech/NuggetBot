@@ -8,7 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 from database import Database
+from items import get_item
+from utils.crew_bank_raid import load_duel_fighter
 from utils.duel_combat import DuelStrike, fighter_from_equipment, format_strike_line, simulate_duel
 from utils.sakunas_finger import roll_sakuna_deflect, sakuna_domain_art
 
@@ -107,6 +112,25 @@ class SakunasFingerDatabaseTests(unittest.IsolatedAsyncioTestCase):
         defender_wallet = await self.db.get_balance(defender_id, guild_id)
         self.assertAlmostEqual(attacker_wallet, 9_500.0)
         self.assertAlmostEqual(defender_wallet, 500.0 + 500.0 + 1400.0)
+
+    async def test_sakuna_does_not_apply_in_crew_raids(self) -> None:
+        guild_id = 55
+        user_id = 9
+        await self.db.ensure_user(user_id, guild_id)
+        await self.db.set_active_sakuna_buff(user_id, guild_id, duration_seconds=3600.0)
+        active = await self.db.peek_active_sakuna_buff(user_id, guild_id)
+        self.assertIsNotNone(active)
+
+        guild = MagicMock()
+        guild.id = guild_id
+        guild.get_member = MagicMock(return_value=SimpleNamespace(display_name="Raider"))
+        fighter = await load_duel_fighter(self.db, guild, user_id)
+        self.assertFalse(fighter.sakuna_deflect_active)
+
+    def test_item_copy_says_duel_only(self) -> None:
+        item = get_item("sakunas_finger")
+        assert item is not None
+        self.assertIn("Does not work in crew raids", item.description)
 
 
 class SakunasFingerArtTests(unittest.TestCase):

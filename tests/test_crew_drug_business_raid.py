@@ -11,6 +11,14 @@ from database import Database
 from utils.crew_raid_ui import pick_drug_loot
 
 
+class CrewRaidCooldownConfigTests(unittest.TestCase):
+    def test_raid_cooldowns_allow_twice_per_hour(self) -> None:
+        self.assertEqual(config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS, 30 * 60)
+        self.assertEqual(config.CREW_BANK_RAID_DEFENSE_COOLDOWN_SECONDS, 30 * 60)
+        self.assertEqual(config.CREW_DRUG_RAID_COOLDOWN_SECONDS, 30 * 60)
+        self.assertEqual(config.CREW_BUSINESS_RAID_COOLDOWN_SECONDS, 30 * 60)
+
+
 class DrugLootTests(unittest.TestCase):
     def test_pick_drug_loot_caps_at_available(self) -> None:
         rng = random.Random(0)

@@ -95,17 +95,29 @@ KIND_ERROR_MESSAGES: dict[RaidKind, dict[str, str]] = {
 }
 
 
+def _format_cooldown_label(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if minutes:
+        return f"{hours}h {minutes}m"
+    return f"{hours}h"
+
+
 def _raid_requirements_text(kind: RaidKind) -> str:
     if kind is RaidKind.BANK:
         return (
             f"Both crews need **{config.CREW_BANK_RAID_MIN_MEMBERS}+** members.\n"
-            f"Attack cooldown: **{config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS // 3600}h**"
+            f"Attack cooldown: **{_format_cooldown_label(config.CREW_BANK_RAID_ATTACK_COOLDOWN_SECONDS)}** "
+            f"(up to twice an hour)"
         )
-    cooldown_h = config.CREW_DRUG_RAID_COOLDOWN_SECONDS // 3600
+    cooldown = _format_cooldown_label(config.CREW_DRUG_RAID_COOLDOWN_SECONDS)
     return (
         f"Your crew needs **{config.CREW_DRUG_BUSINESS_RAID_MIN_MEMBERS}+** members "
         f"(you + two backups). Targets can have **any crew size**.\n"
-        f"Raid cooldown: **{cooldown_h}h** (attack and defense)"
+        f"Raid cooldown: **{cooldown}** attack and defense (up to twice an hour)"
     )
 
 

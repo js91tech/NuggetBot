@@ -477,8 +477,9 @@ SAKUNAS_FINGER = ShopItem(
     7_500_000,
     0,
     (
-        "Use with /use: for 6 hours, 75% chance to deflect incoming duel attacks. "
-        "On proc you auto-win and steal 5% of the attacker's wallet and 7% of their bank."
+        "Use with /use: for 6 hours, 75% chance to deflect incoming /duel attacks. "
+        "On proc you auto-win and steal 5% of the attacker's wallet and 7% of their bank. "
+        "Does not work in crew raids."
     ),
     shop_listed=True,
 )
