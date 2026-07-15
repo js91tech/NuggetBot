@@ -251,6 +251,7 @@ def _one_strike(attacker: DuelFighter, defender: DuelFighter) -> DuelStrike:
         ctx=ctx,
         set_bonus=attacker.set_bonus,
         accessory_bonuses=attacker.accessory_bonuses,
+        attacker_id=attacker.user_id,
     )
     if not attacker.consumable_boost_used and attacker.consumable_boost > 1.0:
         raw = int(raw * attacker.consumable_boost)
@@ -275,6 +276,7 @@ def _one_strike(attacker: DuelFighter, defender: DuelFighter) -> DuelStrike:
         class_modifiers=get_modifiers(defender.class_id),
         attr_mitigation_bonus=attr_mit,
         accessory_bonuses=defender.accessory_bonuses,
+        defender_id=defender.user_id,
     )
     if extra_mit > 0:
         reduced = max(1, int(damage * (1.0 - extra_mit)))

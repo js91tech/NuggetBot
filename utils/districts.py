@@ -1,9 +1,9 @@
-"""Business districts: placement bonuses and influence competition.
+"""Business districts: placement bonuses, deeds, and influence competition.
 
 Districts are server-wide locations a business can relocate to for an income
-bonus. They coexist with crew territories (different scope) and do not affect
-the existing /territory system. Influence is a 0-100 competitive metric tracked
-per district that feeds the Phase 4 Market Expansion action.
+bonus. Exclusive deeds let one player own each district; others may still
+relocate there as tenants (half the placement bonus, rent to the owner).
+Influence remains a competitive 0-100 metric for Market Expansion / wars.
 """
 from __future__ import annotations
 
@@ -65,6 +65,42 @@ def district_income_mult(district_id: str | None) -> float:
     return defn.income_mult if defn is not None else 1.0
 
 
+def effective_district_mult(district_id: str | None, *, is_owner: bool) -> float:
+    """Placement mult for deed owner (full) or tenant (half of the bonus)."""
+    base = district_income_mult(district_id)
+    if base <= 1.0 or is_owner:
+        return base
+    return 1.0 + (base - 1.0) * float(config.DISTRICT_TENANT_MULT_SHARE)
+
+
+def deed_claim_cost(district_id: str) -> float:
+    factor = float(config.DISTRICT_DEED_FACTORS.get(district_id, 1.0))
+    return round(float(config.DISTRICT_DEED_CLAIM_BASE) * factor, 2)
+
+
 def relocate_cost(tier: int) -> float:
     """Relocation fee scales with business tier so it stays meaningful."""
     return config.BUSINESS_DISTRICT_RELOCATE_BASE_COST * max(1, int(tier))
+
+
+def district_bonus_hourly(
+    *,
+    base_hourly_no_district: float,
+    district_id: str | None,
+    is_owner: bool = True,
+) -> float:
+    """Hourly value of the district placement bonus alone."""
+    if not district_id:
+        return 0.0
+    mult = effective_district_mult(district_id, is_owner=is_owner)
+    return max(0.0, base_hourly_no_district * mult - base_hourly_no_district)
+
+
+def buyout_payout(bonus_hourly: float) -> tuple[float, float, float]:
+    """Return (owner_receives, burn_amount, buyer_pays) for a hostile buyout."""
+    days = float(config.DISTRICT_BUYOUT_DAYS)
+    burn_rate = float(config.DISTRICT_BUYOUT_BURN)
+    owner_receives = max(0.0, float(bonus_hourly) * 24.0 * days)
+    burn_amount = owner_receives * burn_rate
+    buyer_pays = owner_receives + burn_amount
+    return owner_receives, burn_amount, buyer_pays

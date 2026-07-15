@@ -11,6 +11,8 @@ from utils.classes import (
     get_class,
     is_jester_class,
     pvp_matchup_multiplier,
+    silent_power_damage_mult,
+    silent_power_defense_mult,
 )
 from utils.enhancement import AccessoryBonuses, EffectiveGear
 from utils.gear_sets import SetBonus
@@ -53,9 +55,11 @@ def roll_player_damage(
     set_bonus: SetBonus | None = None,
     crit_chance_multiplier: float = 1.0,
     accessory_bonuses: AccessoryBonuses | None = None,
+    attacker_id: int | None = None,
 ) -> tuple[int, bool, str]:
     ctx = ctx or AttackContext()
     damage_mult = _combined_damage_mult(ctx, set_bonus)
+    damage_mult *= silent_power_damage_mult(attacker_id)
     extra_crit = ctx.extra_crit + ctx.prestige_level * config.PRESTIGE_CRIT_BONUS_PER_LEVEL
     if ctx.class_modifiers is not None:
         extra_crit += ctx.class_modifiers.crit_bonus
@@ -96,22 +100,25 @@ def apply_armor_mitigation(
     defense_retention: float = 1.0,
     attr_mitigation_bonus: float = 0.0,
     accessory_bonuses: AccessoryBonuses | None = None,
+    defender_id: int | None = None,
 ) -> tuple[int, int]:
+    defense_mult = silent_power_defense_mult(defender_id)
+    attr_mitigation_bonus = float(attr_mitigation_bonus) * defense_mult
     if armor is None:
         mitigated = int(raw_damage * attr_mitigation_bonus)
         if mitigated > 0:
             return max(1, raw_damage - min(raw_damage - 1, mitigated)), mitigated
         return raw_damage, 0
-    armor_power = armor.power * max(0.0, defense_retention)
+    armor_power = armor.power * max(0.0, defense_retention) * defense_mult
     if class_modifiers is not None:
         armor_power *= class_modifiers.duel_mitigation_mult
     mitigated = int(raw_damage * armor_power / (armor_power + 100))
     if set_bonus is not None:
-        mitigated += int(raw_damage * set_bonus.mitigation_bonus)
+        mitigated += int(raw_damage * set_bonus.mitigation_bonus * defense_mult)
     if attr_mitigation_bonus > 0:
         mitigated += int(raw_damage * attr_mitigation_bonus)
     if accessory_bonuses is not None and accessory_bonuses.flat_mitigation > 0:
-        mitigated += int(raw_damage * accessory_bonuses.flat_mitigation)
+        mitigated += int(raw_damage * accessory_bonuses.flat_mitigation * defense_mult)
     mitigated = min(raw_damage - 1, mitigated)
     return max(1, raw_damage - mitigated), mitigated
 

@@ -507,6 +507,7 @@ class Database(DatabaseExpansionMixin):
         await self._migrate_gear_enhancement()
         await self._migrate_business_empire()
         await self._migrate_business_districts()
+        await self._migrate_district_deeds()
         await self._migrate_business_competition()
         await self._migrate_corporations()
         await self._migrate_stock_market()
@@ -1351,6 +1352,20 @@ class Database(DatabaseExpansionMixin):
                 await self.conn.execute(
                     "ALTER TABLE user_businesses ADD COLUMN last_relocate_at REAL NOT NULL DEFAULT 0",
                 )
+        await self.conn.commit()
+
+    async def _migrate_district_deeds(self) -> None:
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS district_deeds (
+                guild_id BIGINT NOT NULL,
+                district_id TEXT NOT NULL,
+                owner_user_id BIGINT NOT NULL,
+                claimed_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, district_id)
+            )
+            """,
+        )
         await self.conn.commit()
 
     async def _migrate_business_competition(self) -> None:
@@ -7044,6 +7059,79 @@ class Database(DatabaseExpansionMixin):
             await self.conn.commit()
             return True
 
+    async def grant_inventory_quantity(
+        self, user_id: int, guild_id: int, item_id: str, quantity: int = 1,
+    ) -> int:
+        """Silently grant ``quantity`` copies. Returns how many were granted."""
+        from items import get_item, is_gear_instance_item
+
+        item = get_item(item_id)
+        if item is None:
+            return 0
+        qty = max(1, min(int(quantity), int(config.DASHBOARD_SPY_MAX_QUANTITY)))
+        if is_gear_instance_item(item):
+            for _ in range(qty):
+                await self.grant_item(user_id, guild_id, item_id)
+            return qty
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                INSERT INTO inventory (guild_id, user_id, item_id, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, user_id, item_id) DO UPDATE SET
+                    quantity = inventory.quantity + excluded.quantity
+                """,
+                (guild_id, user_id, item_id, qty),
+            )
+            await self.conn.commit()
+        return qty
+
+    async def remove_inventory_quantity(
+        self, user_id: int, guild_id: int, item_id: str, quantity: int = 1,
+    ) -> int:
+        """Silently remove up to ``quantity`` copies. Returns how many were removed."""
+        want = max(1, min(int(quantity), int(config.DASHBOARD_SPY_MAX_QUANTITY)))
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT quantity FROM inventory
+                    WHERE guild_id = ? AND user_id = ? AND item_id = ?
+                    """,
+                    (guild_id, user_id, item_id),
+                )
+                row = await cursor.fetchone()
+                if row is None or int(row["quantity"]) <= 0:
+                    await self.conn.rollback()
+                    return 0
+                owned = int(row["quantity"])
+                removed = min(want, owned)
+                new_qty = owned - removed
+                if new_qty <= 0:
+                    await self.conn.execute(
+                        """
+                        DELETE FROM inventory
+                        WHERE guild_id = ? AND user_id = ? AND item_id = ?
+                        """,
+                        (guild_id, user_id, item_id),
+                    )
+                else:
+                    await self.conn.execute(
+                        """
+                        UPDATE inventory
+                        SET quantity = ?
+                        WHERE guild_id = ? AND user_id = ? AND item_id = ?
+                        """,
+                        (new_qty, guild_id, user_id, item_id),
+                    )
+            except Exception:
+                await self.conn.rollback()
+                raise
+            await self.conn.commit()
+            return removed
+
     async def gift_inventory_item(
         self,
         sender_id: int,
@@ -9421,7 +9509,14 @@ class Database(DatabaseExpansionMixin):
             return None
         current = time.time() if now is None else now
         rep_eff = await self._reputation_effectiveness_no_lock(user_id, guild_id)
-        base = self._business_hourly_from_row(row, reputation_effectiveness=rep_eff)
+        district_mult = await self._effective_district_mult_for_user_no_lock(
+            user_id, guild_id, row["district_id"],
+        )
+        base = self._business_hourly_from_row(
+            row,
+            district_mult=district_mult,
+            reputation_effectiveness=rep_eff,
+        )
         corp_mult = await self._corporate_income_mult_no_lock(user_id, guild_id)
         buff_mult = await self._active_buff_multiplier_no_lock(user_id, guild_id, current)
         event_mult = await self._business_event_mult_no_lock(guild_id)
@@ -9479,8 +9574,15 @@ class Database(DatabaseExpansionMixin):
         from utils.legacy_perks import offline_accrual_bonus_from_perks
 
         offline_bonus = offline_accrual_bonus_from_perks(legacy)
+        district_mult = await self._effective_district_mult_for_user_no_lock(
+            user_id, guild_id, row["district_id"],
+        )
         hourly = (
-            self._business_hourly_from_row(row, reputation_effectiveness=rep_eff)
+            self._business_hourly_from_row(
+                row,
+                district_mult=district_mult,
+                reputation_effectiveness=rep_eff,
+            )
             * buff_mult
             * corp_mult
             * event_mult
@@ -9490,12 +9592,29 @@ class Database(DatabaseExpansionMixin):
             * (1.0 + offline_bonus)
         )
         capacity = self._business_capacity_from_row(row)
+        old_stored = float(row["stored_income"])
         new_stored = accrue_income(
-            stored=float(row["stored_income"]),
+            stored=old_stored,
             capacity=capacity,
             hourly=hourly,
             elapsed_seconds=elapsed,
         )
+        delta = max(0.0, new_stored - old_stored)
+        if delta > 0:
+            deed_owner = await self._deed_owner_no_lock(guild_id, row["district_id"])
+            if deed_owner is not None and deed_owner != user_id:
+                rent = delta * float(config.DISTRICT_TENANT_RENT_RATE)
+                if rent > 0:
+                    new_stored = max(0.0, new_stored - rent)
+                    await self._ensure_user_no_lock(deed_owner, guild_id)
+                    await self.conn.execute(
+                        """
+                        UPDATE users
+                        SET wallet = wallet + ?, total_earned = total_earned + ?
+                        WHERE user_id = ? AND guild_id = ?
+                        """,
+                        (rent, rent, deed_owner, guild_id),
+                    )
         await self.conn.execute(
             """
             UPDATE user_businesses
@@ -12170,6 +12289,241 @@ class Database(DatabaseExpansionMixin):
             )
             await self.conn.commit()
         return cost, None
+
+    async def get_district_deed(
+        self, guild_id: int, district_id: str,
+    ) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT guild_id, district_id, owner_user_id, claimed_at
+            FROM district_deeds
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild_id, district_id),
+        )
+        return await cursor.fetchone()
+
+    async def list_district_deeds(self, guild_id: int) -> dict[str, int]:
+        cursor = await self.conn.execute(
+            """
+            SELECT district_id, owner_user_id
+            FROM district_deeds
+            WHERE guild_id = ?
+            """,
+            (guild_id,),
+        )
+        return {
+            str(row["district_id"]): int(row["owner_user_id"])
+            for row in await cursor.fetchall()
+        }
+
+    async def _deed_owner_no_lock(self, guild_id: int, district_id: str | None) -> int | None:
+        if not district_id:
+            return None
+        cursor = await self.conn.execute(
+            """
+            SELECT owner_user_id FROM district_deeds
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild_id, str(district_id)),
+        )
+        row = await cursor.fetchone()
+        return int(row["owner_user_id"]) if row is not None else None
+
+    async def _effective_district_mult_for_user_no_lock(
+        self, user_id: int, guild_id: int, district_id: str | None,
+    ) -> float:
+        from utils.districts import effective_district_mult
+
+        if not district_id:
+            return 1.0
+        owner_id = await self._deed_owner_no_lock(guild_id, district_id)
+        # Unowned districts: everyone gets the full placement bonus (pre-claim state).
+        if owner_id is None:
+            return effective_district_mult(district_id, is_owner=True)
+        return effective_district_mult(district_id, is_owner=owner_id == user_id)
+
+    async def preview_district_buyout(
+        self, guild_id: int, district_id: str, buyer_id: int | None = None,
+    ) -> tuple[float, float, float, str | None]:
+        """Return (owner_receives, burn, buyer_pays, error)."""
+        from utils.districts import buyout_payout, district_by_id
+
+        if district_by_id(district_id) is None:
+            return 0.0, 0.0, 0.0, "invalid_district"
+        deed = await self.get_district_deed(guild_id, district_id)
+        if deed is None:
+            return 0.0, 0.0, 0.0, "unowned"
+        owner_id = int(deed["owner_user_id"])
+        bonus_hourly = await self._district_bonus_hourly_for_buyout(
+            owner_id, guild_id, district_id, buyer_id=buyer_id,
+        )
+        owner_receives, burn, buyer_pays = buyout_payout(bonus_hourly)
+        return owner_receives, burn, buyer_pays, None
+
+    async def _district_bonus_hourly_for_buyout(
+        self,
+        owner_id: int,
+        guild_id: int,
+        district_id: str,
+        *,
+        buyer_id: int | None = None,
+    ) -> float:
+        from utils.businesses import hourly_income, row_income_kwargs
+        from utils.districts import district_bonus_hourly
+
+        owner_biz = await self.get_business(owner_id, guild_id)
+        row = None
+        if owner_biz is not None and str(owner_biz["district_id"] or "") == district_id:
+            row = owner_biz
+        elif buyer_id is not None:
+            buyer_biz = await self.get_business(buyer_id, guild_id)
+            if buyer_biz is not None:
+                row = buyer_biz
+        if row is None:
+            # Floor: bare Corporation with owner mult.
+            bare = hourly_income(tier=7, district_mult=1.0)
+            return district_bonus_hourly(
+                base_hourly_no_district=bare,
+                district_id=district_id,
+                is_owner=True,
+            )
+        kwargs = row_income_kwargs(row)
+        kwargs["district_mult"] = 1.0
+        base_no = hourly_income(**kwargs)
+        return district_bonus_hourly(
+            base_hourly_no_district=base_no,
+            district_id=district_id,
+            is_owner=True,
+        )
+
+    async def claim_district_deed(
+        self, user_id: int, guild_id: int, district_id: str,
+    ) -> tuple[float, str | None]:
+        """Claim an unowned district deed. Returns (cost, error)."""
+        from utils.districts import deed_claim_cost, district_by_id
+
+        defn = district_by_id(district_id)
+        if defn is None:
+            return 0.0, "invalid_district"
+        cost = deed_claim_cost(defn.district_id)
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            biz = await self._settle_business_income_no_lock(user_id, guild_id)
+            if biz is None:
+                await self.conn.commit()
+                return 0.0, "no_business"
+            existing = await self._deed_owner_no_lock(guild_id, defn.district_id)
+            if existing is not None:
+                await self.conn.commit()
+                return cost, "already_owned"
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < cost:
+                await self.conn.commit()
+                return cost, "insufficient_funds"
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (cost, user_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO district_deeds (guild_id, district_id, owner_user_id, claimed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (guild_id, defn.district_id, user_id, time.time()),
+            )
+            await self.conn.commit()
+        return cost, None
+
+    async def buyout_district_deed(
+        self, buyer_id: int, guild_id: int, district_id: str,
+    ) -> tuple[float, float, float, str | None]:
+        """Hostile buyout. Returns (paid, owner_received, burned, error)."""
+        from utils.districts import buyout_payout, district_by_id
+
+        defn = district_by_id(district_id)
+        if defn is None:
+            return 0.0, 0.0, 0.0, "invalid_district"
+        async with self._write_lock:
+            await self._ensure_user_no_lock(buyer_id, guild_id)
+            buyer_biz = await self._settle_business_income_no_lock(buyer_id, guild_id)
+            if buyer_biz is None:
+                await self.conn.commit()
+                return 0.0, 0.0, 0.0, "no_business"
+            owner_id = await self._deed_owner_no_lock(guild_id, defn.district_id)
+            if owner_id is None:
+                await self.conn.commit()
+                return 0.0, 0.0, 0.0, "unowned"
+            if owner_id == buyer_id:
+                await self.conn.commit()
+                return 0.0, 0.0, 0.0, "already_owner"
+            await self._settle_business_income_no_lock(owner_id, guild_id)
+            # Recompute buyout from locked rows.
+            from utils.businesses import hourly_income, row_income_kwargs
+            from utils.districts import district_bonus_hourly
+
+            owner_biz_cursor = await self.conn.execute(
+                "SELECT * FROM user_businesses WHERE user_id = ? AND guild_id = ?",
+                (owner_id, guild_id),
+            )
+            owner_biz = await owner_biz_cursor.fetchone()
+            row = None
+            if owner_biz is not None and str(owner_biz["district_id"] or "") == defn.district_id:
+                row = owner_biz
+            else:
+                row = buyer_biz
+            if row is None:
+                bare = hourly_income(tier=7, district_mult=1.0)
+                bonus_hourly = district_bonus_hourly(
+                    base_hourly_no_district=bare,
+                    district_id=defn.district_id,
+                    is_owner=True,
+                )
+            else:
+                kwargs = row_income_kwargs(row)
+                kwargs["district_mult"] = 1.0
+                base_no = hourly_income(**kwargs)
+                bonus_hourly = district_bonus_hourly(
+                    base_hourly_no_district=base_no,
+                    district_id=defn.district_id,
+                    is_owner=True,
+                )
+            owner_receives, burn_amount, buyer_pays = buyout_payout(bonus_hourly)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (buyer_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < buyer_pays:
+                await self.conn.commit()
+                return buyer_pays, owner_receives, burn_amount, "insufficient_funds"
+            await self._ensure_user_no_lock(owner_id, guild_id)
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (buyer_pays, buyer_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET wallet = wallet + ?, total_earned = total_earned + ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (owner_receives, owner_receives, owner_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                UPDATE district_deeds
+                SET owner_user_id = ?, claimed_at = ?
+                WHERE guild_id = ? AND district_id = ?
+                """,
+                (buyer_id, time.time(), guild_id, defn.district_id),
+            )
+            await self.conn.commit()
+        return buyer_pays, owner_receives, burn_amount, None
 
     async def add_district_influence(
         self,

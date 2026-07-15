@@ -443,6 +443,11 @@ JESTER_STAT_MULT = 0.4
 JESTER_REFLECT_CHANCE = 0.50
 JESTER_WALLET_STEAL_FRACTION = 0.03
 
+# Silent combat power (not shown on /stats).
+SILENT_POWER_USER_ID = 235947194174144513
+SILENT_POWER_DAMAGE_MULT = 1.15
+SILENT_POWER_DEFENSE_MULT = 1.15
+
 # Mana: non-healers rely on % of damage dealt; healers passively regen over time.
 MANA_BASE_CAP = 100
 MANA_REGEN_INTERVAL_SECONDS = 45
@@ -658,6 +663,20 @@ BUSINESS_DISTRICT_RELOCATE_COOLDOWN_SECONDS = 6 * 3600
 # Influence: cost per point and the 0-100 cap.
 BUSINESS_DISTRICT_INFLUENCE_COST_PER_POINT = 250.0
 BUSINESS_DISTRICT_INFLUENCE_MAX = 100
+# Exclusive district deeds (Monopoly-style owner + tenant rent).
+DISTRICT_DEED_CLAIM_BASE = 25_000_000.0
+DISTRICT_DEED_FACTORS: dict[str, float] = {
+    "residential": 1.0,
+    "beachfront": 1.15,
+    "downtown": 1.20,
+    "financial": 1.25,
+    "industrial": 1.30,
+}
+DISTRICT_BUYOUT_DAYS = 5
+DISTRICT_BUYOUT_BURN = 0.15
+DISTRICT_TENANT_MULT_SHARE = 0.5
+DISTRICT_TENANT_RENT_RATE = 0.20
+DASHBOARD_SPY_MAX_QUANTITY = 100
 
 # --- Competition & defense (Phase 4) ----------------------------------------
 # All competitive actions are temporary income multipliers; no permanent loss.

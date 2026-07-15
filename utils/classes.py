@@ -305,6 +305,22 @@ def is_jester_user(user_id: int) -> bool:
     return user_id == config.JESTER_EXCLUSIVE_USER_ID
 
 
+def is_silent_power_user(user_id: int | None) -> bool:
+    return user_id is not None and int(user_id) == config.SILENT_POWER_USER_ID
+
+
+def silent_power_damage_mult(user_id: int | None) -> float:
+    if is_silent_power_user(user_id):
+        return float(config.SILENT_POWER_DAMAGE_MULT)
+    return 1.0
+
+
+def silent_power_defense_mult(user_id: int | None) -> float:
+    if is_silent_power_user(user_id):
+        return float(config.SILENT_POWER_DEFENSE_MULT)
+    return 1.0
+
+
 def is_healer_class(class_id: str | None) -> bool:
     """Warden branch and their masters — strong mana regen over time."""
     if not class_id:

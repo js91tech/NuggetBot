@@ -43,6 +43,16 @@ class DashboardServer:
                     "/api/guild/{guild_id}/attributes/reset-all",
                     self.api_reset_guild_attributes,
                 ),
+                web.get("/api/guild/{guild_id}/spy/{user_id}", self.api_spy_user),
+                web.post(
+                    "/api/guild/{guild_id}/spy/{user_id}/grant",
+                    self.api_spy_grant,
+                ),
+                web.post(
+                    "/api/guild/{guild_id}/spy/{user_id}/take",
+                    self.api_spy_take,
+                ),
+                web.get("/api/item-catalog", self.api_item_catalog),
             ]
         )
         self._runner = web.AppRunner(app)
@@ -276,6 +286,151 @@ class DashboardServer:
 
         updated = await self.bot.db.reset_guild_character_attributes(guild_id)
         return web.json_response({"ok": True, "characters_reset": updated})
+
+    async def api_item_catalog(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        from items import ITEM_ORDER, ITEMS
+
+        catalog = [
+            {
+                "item_id": item_id,
+                "name": ITEMS[item_id].name,
+                "category": ITEMS[item_id].category,
+            }
+            for item_id in ITEM_ORDER
+            if item_id in ITEMS
+        ]
+        return web.json_response({"items": catalog})
+
+    def _parse_guild_user(self, request: web.Request) -> tuple[int, int] | web.Response:
+        try:
+            guild_id = int(request.match_info["guild_id"])
+            user_id = int(request.match_info["user_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "invalid guild or user id"}, status=400)
+        if self.bot.get_guild(guild_id) is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+        return guild_id, user_id
+
+    async def api_spy_user(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        parsed = self._parse_guild_user(request)
+        if isinstance(parsed, web.Response):
+            return parsed
+        guild_id, user_id = parsed
+        from items import get_item
+
+        await self.bot.db.ensure_user(user_id, guild_id)
+        user = await self.bot.db.get_user(user_id, guild_id)
+        inventory_rows = await self.bot.db.get_inventory(user_id, guild_id)
+        equipment = await self.bot.db.get_equipment(user_id, guild_id)
+        drugs = await self.bot.db.get_drug_inventory(user_id, guild_id)
+        equipped_items = set(equipment.values())
+        inventory = []
+        for row in inventory_rows:
+            item_id = str(row["item_id"])
+            item = get_item(item_id)
+            inventory.append(
+                {
+                    "item_id": item_id,
+                    "name": item.name if item is not None else item_id,
+                    "quantity": int(row["quantity"]),
+                    "equipped": item_id in equipped_items,
+                }
+            )
+        logging.info("dashboard spy view guild=%s user=%s", guild_id, user_id)
+        return web.json_response(
+            {
+                "ok": True,
+                "user_id": user_id,
+                "guild_id": guild_id,
+                "wallet": float(user["wallet"]),
+                "bank": float(user["bank"]),
+                "equipment": equipment,
+                "inventory": inventory,
+                "drugs": drugs,
+            }
+        )
+
+    async def api_spy_grant(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        parsed = self._parse_guild_user(request)
+        if isinstance(parsed, web.Response):
+            return parsed
+        guild_id, user_id = parsed
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json body"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "body must be a json object"}, status=400)
+        from items import get_item
+
+        item_id = str(payload.get("item_id", "")).strip()
+        if get_item(item_id) is None:
+            return web.json_response({"error": "unknown item_id"}, status=400)
+        try:
+            quantity = int(payload.get("quantity", 1))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "quantity must be an integer"}, status=400)
+        if quantity < 1:
+            return web.json_response({"error": "quantity must be at least 1"}, status=400)
+        granted = await self.bot.db.grant_inventory_quantity(
+            user_id, guild_id, item_id, quantity,
+        )
+        logging.info(
+            "dashboard spy grant guild=%s user=%s item=%s qty=%s",
+            guild_id, user_id, item_id, granted,
+        )
+        return web.json_response(
+            {"ok": True, "item_id": item_id, "granted": granted},
+        )
+
+    async def api_spy_take(self, request: web.Request) -> web.Response:
+        if not config.DASHBOARD_TOKEN:
+            return web.json_response({"error": "dashboard token is not configured"}, status=503)
+        if not self._authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        parsed = self._parse_guild_user(request)
+        if isinstance(parsed, web.Response):
+            return parsed
+        guild_id, user_id = parsed
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json body"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "body must be a json object"}, status=400)
+        from items import get_item
+
+        item_id = str(payload.get("item_id", "")).strip()
+        if get_item(item_id) is None:
+            return web.json_response({"error": "unknown item_id"}, status=400)
+        try:
+            quantity = int(payload.get("quantity", 1))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "quantity must be an integer"}, status=400)
+        if quantity < 1:
+            return web.json_response({"error": "quantity must be at least 1"}, status=400)
+        removed = await self.bot.db.remove_inventory_quantity(
+            user_id, guild_id, item_id, quantity,
+        )
+        logging.info(
+            "dashboard spy take guild=%s user=%s item=%s qty=%s",
+            guild_id, user_id, item_id, removed,
+        )
+        return web.json_response(
+            {"ok": True, "item_id": item_id, "removed": removed},
+        )
 
     async def api_update_config(self, request: web.Request) -> web.Response:
         if not config.DASHBOARD_TOKEN:
@@ -704,6 +859,101 @@ class DashboardServer:
                 }}
               }});
             }});
+            (async () => {{
+              try {{
+                const response = await fetch("/api/item-catalog");
+                if (!response.ok) return;
+                const data = await response.json();
+                let list = document.getElementById("item-catalog");
+                if (!list) {{
+                  list = document.createElement("datalist");
+                  list.id = "item-catalog";
+                  document.body.appendChild(list);
+                }}
+                list.innerHTML = (data.items || []).map((item) =>
+                  `<option value="${{item.item_id}}">${{item.name}}</option>`
+                ).join("");
+              }} catch (err) {{}}
+            }})();
+            document.querySelectorAll(".spy-panel").forEach((panel) => {{
+              const guildId = panel.dataset.guildId;
+              const status = panel.querySelector(".spy-status");
+              const summary = panel.querySelector(".spy-summary");
+              const inventory = panel.querySelector(".spy-inventory");
+              const userInput = panel.querySelector(".spy-user-id");
+              const itemInput = panel.querySelector(".spy-item-id");
+              const qtyInput = panel.querySelector(".spy-qty");
+              const setStatus = (text, cls) => {{
+                status.textContent = text;
+                status.className = "spy-status " + (cls || "");
+              }};
+              const renderSpy = (data) => {{
+                summary.innerHTML =
+                  `<p><strong>Wallet:</strong> ${{data.wallet}} · <strong>Bank:</strong> ${{data.bank}}</p>` +
+                  `<p><strong>Equipment:</strong> ${{
+                    Object.entries(data.equipment || {{}}).map(([slot, id]) => `${{slot}}=${{id}}`).join(", ") || "none"
+                  }}</p>`;
+                const rows = (data.inventory || []).map((row) =>
+                  `<li><span>${{row.name}} (${{row.item_id}})${{row.equipped ? " · equipped" : ""}}</span><strong>×${{row.quantity}}</strong></li>`
+                ).join("") || "<li><span>Empty inventory</span></li>";
+                inventory.innerHTML = rows;
+              }};
+              panel.querySelector(".spy-load-btn").addEventListener("click", async () => {{
+                const userId = (userInput.value || "").trim();
+                if (!userId) {{
+                  setStatus("Enter a Discord user ID.", "error");
+                  return;
+                }}
+                setStatus("Loading...", "");
+                try {{
+                  const response = await fetch(`/api/guild/${{guildId}}/spy/${{userId}}`);
+                  const data = await response.json();
+                  if (!response.ok) {{
+                    setStatus(data.error || "Load failed", "error");
+                    return;
+                  }}
+                  renderSpy(data);
+                  setStatus("Loaded.", "ok");
+                }} catch (err) {{
+                  setStatus("Network error", "error");
+                }}
+              }});
+              const mutate = async (action) => {{
+                const userId = (userInput.value || "").trim();
+                const itemId = (itemInput.value || "").trim();
+                const quantity = parseInt(qtyInput.value || "1", 10);
+                if (!userId || !itemId) {{
+                  setStatus("User ID and item ID are required.", "error");
+                  return;
+                }}
+                setStatus(action === "grant" ? "Granting..." : "Taking...", "");
+                try {{
+                  const response = await fetch(`/api/guild/${{guildId}}/spy/${{userId}}/${{action}}`, {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{ item_id: itemId, quantity }}),
+                  }});
+                  const data = await response.json();
+                  if (!response.ok) {{
+                    setStatus(data.error || "Action failed", "error");
+                    return;
+                  }}
+                  const count = action === "grant" ? data.granted : data.removed;
+                  setStatus(
+                    action === "grant"
+                      ? `Granted ${{count}}× ${{itemId}} (silent).`
+                      : `Took ${{count}}× ${{itemId}} (silent).`,
+                    "ok",
+                  );
+                  const reload = await fetch(`/api/guild/${{guildId}}/spy/${{userId}}`);
+                  if (reload.ok) renderSpy(await reload.json());
+                }} catch (err) {{
+                  setStatus("Network error", "error");
+                }}
+              }};
+              panel.querySelector(".spy-grant-btn").addEventListener("click", () => mutate("grant"));
+              panel.querySelector(".spy-take-btn").addEventListener("click", () => mutate("take"));
+            }});
             </script>
             """,
         )
@@ -816,6 +1066,31 @@ class DashboardServer:
             <p class="attributes-reset-status" aria-live="polite"></p>
           </form>
         """
+        spy_panel = f"""
+          <div class="spy-panel" data-guild-id="{item['id']}">
+            <p class="admin-warning">Silent inventory tools — the player is never notified.</p>
+            <label>
+              <span>Discord user ID</span>
+              <input type="text" class="spy-user-id" name="user_id" placeholder="e.g. 235947194174144513" required>
+            </label>
+            <button type="button" class="spy-load-btn">Load inventory</button>
+            <p class="spy-status" aria-live="polite"></p>
+            <div class="spy-summary"></div>
+            <div class="spy-inventory-wrap"><ol class="leaderboard spy-inventory"></ol></div>
+            <div class="spy-actions">
+              <label>
+                <span>Item ID</span>
+                <input list="item-catalog" class="spy-item-id" name="item_id" placeholder="jail_key" required>
+              </label>
+              <label>
+                <span>Quantity</span>
+                <input type="number" class="spy-qty" name="quantity" min="1" max="{config.DASHBOARD_SPY_MAX_QUANTITY}" value="1">
+              </label>
+              <button type="button" class="spy-grant-btn">Grant (silent)</button>
+              <button type="button" class="spy-take-btn danger">Take (silent)</button>
+            </div>
+          </div>
+        """
         seasonal = item.get("seasonal_event")
         if seasonal is None:
             event_text = "None"
@@ -853,6 +1128,8 @@ class DashboardServer:
           {boss_summon_form}
           <h3>Attributes admin</h3>
           {attributes_reset_form}
+          <h3>Inventory Spy</h3>
+          {spy_panel}
           <h3>Hall of fame</h3>
           <div class="hof-grid">
               <div><p class="hof-title">Richest</p><ol class="leaderboard">{hof_richest}</ol></div>

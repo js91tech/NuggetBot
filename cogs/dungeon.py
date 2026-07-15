@@ -323,6 +323,7 @@ class Dungeon(commands.Cog):
             off_hand=loadout.off_hand,
             ctx=ctx,
             accessory_bonuses=loadout.accessory_bonuses,
+            attacker_id=user_id,
         )
         player_hp = float(run["player_hp"])
         enemy_hp = float(run["enemy_hp"]) - damage
@@ -508,6 +509,7 @@ class Dungeon(commands.Cog):
             off_hand=loadout.off_hand,
             ctx=ctx,
             accessory_bonuses=loadout.accessory_bonuses,
+            attacker_id=user_id,
         )
         enemy_hp = float(party["enemy_hp"]) - damage
         room = int(party["room"])

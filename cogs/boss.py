@@ -836,6 +836,7 @@ class Boss(commands.Cog):
         defense_retention: float = 1.0,
         attr_mitigation_bonus: float = 0.0,
         accessory_bonuses=None,
+        defender_id: int | None = None,
     ) -> tuple[int, int]:
         from utils.combat_engine import apply_armor_mitigation
 
@@ -846,6 +847,7 @@ class Boss(commands.Cog):
             defense_retention=defense_retention,
             attr_mitigation_bonus=attr_mitigation_bonus,
             accessory_bonuses=accessory_bonuses,
+            defender_id=defender_id,
         )
 
     @staticmethod
@@ -858,6 +860,7 @@ class Boss(commands.Cog):
         hp_ratio: float = 1.0,
         attr_mitigation_bonus: float = 0.0,
         accessory_bonuses=None,
+        defender_id: int | None = None,
     ) -> tuple[int, int, bool, str]:
         variant_config = config.BOSS_VARIANTS[variant]
         raw_damage = roll_counter_damage(variant, hp_ratio=hp_ratio)
@@ -871,6 +874,7 @@ class Boss(commands.Cog):
             defense_retention=defense_retention,
             attr_mitigation_bonus=attr_mitigation_bonus,
             accessory_bonuses=accessory_bonuses,
+            defender_id=defender_id,
         )
         moves = {
             "normal": ("backhands", "shoulder-checks", "bonks"),
@@ -1364,6 +1368,7 @@ class Boss(commands.Cog):
             set_bonus=set_bonus,
             crit_chance_multiplier=crit_mult,
             accessory_bonuses=loadout.accessory_bonuses,
+            attacker_id=member.id,
         )
         if summoner_debuff:
             damage = apply_summoner_attack_debuff(damage)
@@ -1580,6 +1585,7 @@ class Boss(commands.Cog):
             ctx=ctx,
             set_bonus=set_bonus,
             accessory_bonuses=loadout.accessory_bonuses,
+            attacker_id=member.id,
         )
         damage = max(1, damage)
 
@@ -1849,6 +1855,7 @@ class Boss(commands.Cog):
             hp_ratio=hp_ratio,
             attr_mitigation_bonus=attr_bonuses.mitigation_bonus,
             accessory_bonuses=loadout.accessory_bonuses,
+            defender_id=victim_id,
         )
         if summoner_victim:
             damage = apply_summoner_counter_damage(damage)

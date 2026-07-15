@@ -465,8 +465,11 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· 📦 Capacity — **storage cap only** (no income)\n"
                     "· 😀 Employee Satisfaction — `/business manage` (wages, team events); "
                     "drifts without care",
-                    "**Districts** (`/business districts`) — relocate for an income bonus and "
-                    "buy influence:\n" + "\n".join(district_lines),
+                    "**Districts** (`/business districts`) — relocate for an income bonus, "
+                    "claim exclusive deeds (owner gets full bonus + 20% tenant rent; tenants "
+                    "get half the district bonus), or hostile-buyout an owned deed "
+                    "(5 days of district-bonus value + 15% burned). Also buy influence:\n"
+                    + "\n".join(district_lines),
                     "**Competition & defense** (`/business action`, `/business defend`)\n"
                     "· 📣 Marketing & 🧑\u200d💼 Talent — buff your own revenue\n"
                     "· 💸 Price War & 📰 Reputation Attack — debuff a rival (mitigated by their "
