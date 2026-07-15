@@ -468,7 +468,12 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "**Districts** (`/business districts`) — relocate for an income bonus, "
                     "claim exclusive deeds (owner gets full bonus + 20% tenant rent; tenants "
                     "get half the district bonus), or hostile-buyout an owned deed "
-                    "(5 days of district-bonus value + 15% burned). Also buy influence:\n"
+                    "(5 days of district-bonus value + 15% burned; "
+                    f"{int(config.DISTRICT_BUYOUT_INFLUENCE_DISCOUNT_THRESHOLD)}+ influence "
+                    f"cuts buyout burn by "
+                    f"{int(config.DISTRICT_BUYOUT_INFLUENCE_DISCOUNT * 100)}%). "
+                    "Influence ops: Invest, Contest war control, Undermine rivals, "
+                    "Fortify temp influence, and deed-owner Suppress:\n"
                     + "\n".join(district_lines),
                     "**Competition & defense** (`/business action`, `/business defend`)\n"
                     "· 📣 Marketing & 🧑\u200d💼 Talent — buff your own revenue\n"

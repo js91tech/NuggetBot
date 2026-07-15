@@ -508,6 +508,7 @@ class Database(DatabaseExpansionMixin):
         await self._migrate_business_empire()
         await self._migrate_business_districts()
         await self._migrate_district_deeds()
+        await self._migrate_district_influence_ops()
         await self._migrate_business_competition()
         await self._migrate_corporations()
         await self._migrate_stock_market()
@@ -1362,6 +1363,32 @@ class Database(DatabaseExpansionMixin):
                 district_id TEXT NOT NULL,
                 owner_user_id BIGINT NOT NULL,
                 claimed_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, district_id)
+            )
+            """,
+        )
+        await self.conn.commit()
+
+    async def _migrate_district_influence_ops(self) -> None:
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS district_influence_fortify (
+                guild_id BIGINT NOT NULL,
+                district_id TEXT NOT NULL,
+                user_id BIGINT NOT NULL,
+                points REAL NOT NULL DEFAULT 0 CHECK (points >= 0),
+                expires_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, district_id, user_id)
+            )
+            """,
+        )
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS district_war_suppress (
+                guild_id BIGINT NOT NULL,
+                district_id TEXT NOT NULL,
+                suppressed_until REAL NOT NULL DEFAULT 0,
+                suppressed_by BIGINT NOT NULL,
                 PRIMARY KEY (guild_id, district_id)
             )
             """,
@@ -9846,11 +9873,28 @@ class Database(DatabaseExpansionMixin):
         bonus = stacks * config.DRUG_SYNERGY_BUFF_INCOME_BONUS
         return 1.0 + bonus
 
+    async def _district_war_suppressed_no_lock(
+        self, guild_id: int, district_id: str, now: float,
+    ) -> bool:
+        cursor = await self.conn.execute(
+            """
+            SELECT suppressed_until FROM district_war_suppress
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild_id, str(district_id)),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        return float(row["suppressed_until"] or 0) > now
+
     async def _district_war_income_mult_no_lock(
         self, user_id: int, guild_id: int, row: aiosqlite.Row, now: float,
     ) -> float:
         district_id = row["district_id"]
         if not district_id:
+            return 1.0
+        if await self._district_war_suppressed_no_lock(guild_id, str(district_id), now):
             return 1.0
         crew = await self._crew_name_no_lock(user_id, guild_id)
         if crew is None:
@@ -10177,21 +10221,13 @@ class Database(DatabaseExpansionMixin):
         ends_at = now + config.DISTRICT_WAR_TICK_SECONDS
         async with self._write_lock:
             for district_id in DISTRICT_MAP:
-                cursor = await self.conn.execute(
-                    """
-                    SELECT cm.crew_name, SUM(di.influence) AS total
-                    FROM district_influence di
-                    JOIN crew_members cm
-                      ON cm.guild_id = di.guild_id AND CAST(cm.user_id AS TEXT) = di.entity_id
-                    WHERE di.guild_id = ? AND di.district_id = ? AND di.entity_type = 'user'
-                    GROUP BY cm.crew_name
-                    ORDER BY total DESC
-                    LIMIT 1
-                    """,
-                    (guild_id, district_id),
+                standings = await self.list_district_crew_influence(
+                    guild_id, district_id, limit=1,
                 )
-                top = await cursor.fetchone()
-                if top is None or float(top["total"] or 0) <= 0:
+                if not standings:
+                    continue
+                top_crew, total = standings[0]
+                if total <= 0:
                     continue
                 await self.conn.execute(
                     """
@@ -10201,41 +10237,62 @@ class Database(DatabaseExpansionMixin):
                         crew_name = excluded.crew_name,
                         bonus_ends_at = excluded.bonus_ends_at
                     """,
-                    (guild_id, district_id, str(top["crew_name"]), ends_at),
+                    (guild_id, district_id, str(top_crew), ends_at),
                 )
             await self.conn.commit()
 
     async def contest_district_war(
         self, user_id: int, guild_id: int, district_id: str,
     ) -> dict[str, object]:
+        """Spend personal influence to seize temporary war control for your crew."""
+        from utils.districts import district_by_id
+
+        if district_by_id(district_id) is None:
+            return {"error": "invalid_district"}
         crew = await self.get_crew_membership(user_id, guild_id)
         if crew is None:
             return {"error": "no_crew"}
+        cost = float(config.DISTRICT_WAR_CONTEST_COST)
+        now = time.time()
         async with self._write_lock:
-            cursor = await self.conn.execute(
-                """
-                SELECT influence FROM district_influence
-                WHERE guild_id = ? AND district_id = ? AND entity_type = 'crew' AND entity_id = ?
-                """,
-                (guild_id, district_id, crew),
+            cd_err = await self._district_ops_cooldown_error_no_lock(
+                user_id, guild_id, "district_contest",
+                config.DISTRICT_WAR_CONTEST_COOLDOWN_SECONDS, now,
             )
-            row = await cursor.fetchone()
-            influence = float(row["influence"]) if row else 0.0
-            if influence < config.DISTRICT_WAR_CONTEST_COST:
+            if cd_err is not None:
                 await self.conn.commit()
-                return {"error": "insufficient_influence"}
-            new_inf = influence - config.DISTRICT_WAR_CONTEST_COST
+                return cd_err
+            current = await self._user_base_influence_no_lock(user_id, guild_id, district_id)
+            if current < cost:
+                await self.conn.commit()
+                return {"error": "insufficient_influence", "have": current, "need": cost}
+            new_inf = current - cost
+            await self._set_user_base_influence_no_lock(
+                user_id, guild_id, district_id, new_inf, now,
+            )
+            ends_at = now + float(config.DISTRICT_WAR_CONTEST_DURATION_SECONDS)
             await self.conn.execute(
                 """
-                INSERT INTO district_influence (guild_id, district_id, entity_type, entity_id, influence, updated_at)
-                VALUES (?, ?, 'crew', ?, ?, ?)
-                ON CONFLICT(guild_id, district_id, entity_type, entity_id) DO UPDATE SET
-                    influence = excluded.influence, updated_at = excluded.updated_at
+                INSERT INTO district_war_control (guild_id, district_id, crew_name, bonus_ends_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, district_id) DO UPDATE SET
+                    crew_name = excluded.crew_name,
+                    bonus_ends_at = excluded.bonus_ends_at
                 """,
-                (guild_id, district_id, crew, new_inf, time.time()),
+                (guild_id, district_id, crew, ends_at),
+            )
+            await self._touch_district_ops_cooldown_no_lock(
+                user_id, guild_id, "district_contest", now,
             )
             await self.conn.commit()
-        return {"error": None, "influence_spent": config.DISTRICT_WAR_CONTEST_COST}
+        return {
+            "error": None,
+            "influence_spent": cost,
+            "influence_left": new_inf,
+            "crew_name": crew,
+            "ends_at": ends_at,
+            "district_id": district_id,
+        }
 
     async def process_business_income(self, guild_id: int) -> None:
         """Background tick: accrue stored income for every business in a guild."""
@@ -12347,7 +12404,11 @@ class Database(DatabaseExpansionMixin):
         self, guild_id: int, district_id: str, buyer_id: int | None = None,
     ) -> tuple[float, float, float, str | None]:
         """Return (owner_receives, burn, buyer_pays, error)."""
-        from utils.districts import buyout_payout, district_by_id
+        from utils.districts import (
+            apply_buyout_influence_discount,
+            buyout_payout,
+            district_by_id,
+        )
 
         if district_by_id(district_id) is None:
             return 0.0, 0.0, 0.0, "invalid_district"
@@ -12359,6 +12420,11 @@ class Database(DatabaseExpansionMixin):
             owner_id, guild_id, district_id, buyer_id=buyer_id,
         )
         owner_receives, burn, buyer_pays = buyout_payout(bonus_hourly)
+        if buyer_id is not None:
+            influence = await self.get_user_district_influence(buyer_id, guild_id, district_id)
+            owner_receives, burn, buyer_pays, _ = apply_buyout_influence_discount(
+                owner_receives, burn, buyer_pays, influence,
+            )
         return owner_receives, burn, buyer_pays, None
 
     async def _district_bonus_hourly_for_buyout(
@@ -12493,6 +12559,14 @@ class Database(DatabaseExpansionMixin):
                     is_owner=True,
                 )
             owner_receives, burn_amount, buyer_pays = buyout_payout(bonus_hourly)
+            from utils.districts import apply_buyout_influence_discount
+
+            buyer_influence = await self._user_effective_influence_no_lock(
+                buyer_id, guild_id, defn.district_id, time.time(),
+            )
+            owner_receives, burn_amount, buyer_pays, _ = apply_buyout_influence_discount(
+                owner_receives, burn_amount, buyer_pays, buyer_influence,
+            )
             cursor = await self.conn.execute(
                 "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
                 (buyer_id, guild_id),
@@ -12583,6 +12657,13 @@ class Database(DatabaseExpansionMixin):
     async def get_user_district_influence(
         self, user_id: int, guild_id: int, district_id: str,
     ) -> float:
+        return await self._user_effective_influence_no_lock(
+            user_id, guild_id, district_id, time.time(),
+        )
+
+    async def _user_base_influence_no_lock(
+        self, user_id: int, guild_id: int, district_id: str,
+    ) -> float:
         cursor = await self.conn.execute(
             """
             SELECT influence FROM district_influence
@@ -12593,22 +12674,388 @@ class Database(DatabaseExpansionMixin):
         row = await cursor.fetchone()
         return float(row["influence"]) if row is not None else 0.0
 
+    async def _user_fortify_points_no_lock(
+        self, user_id: int, guild_id: int, district_id: str, now: float,
+    ) -> float:
+        cursor = await self.conn.execute(
+            """
+            SELECT points, expires_at FROM district_influence_fortify
+            WHERE guild_id = ? AND district_id = ? AND user_id = ?
+            """,
+            (guild_id, district_id, user_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return 0.0
+        if float(row["expires_at"] or 0) <= now:
+            return 0.0
+        return max(0.0, float(row["points"] or 0))
+
+    async def _user_effective_influence_no_lock(
+        self, user_id: int, guild_id: int, district_id: str, now: float,
+    ) -> float:
+        base = await self._user_base_influence_no_lock(user_id, guild_id, district_id)
+        fortify = await self._user_fortify_points_no_lock(user_id, guild_id, district_id, now)
+        return base + fortify
+
+    async def _set_user_base_influence_no_lock(
+        self, user_id: int, guild_id: int, district_id: str, value: float, now: float,
+    ) -> None:
+        value = max(0.0, float(value))
+        if value <= 0:
+            await self.conn.execute(
+                """
+                DELETE FROM district_influence
+                WHERE guild_id = ? AND district_id = ? AND entity_type = 'user' AND entity_id = ?
+                """,
+                (guild_id, district_id, str(user_id)),
+            )
+            return
+        await self.conn.execute(
+            """
+            INSERT INTO district_influence (
+                guild_id, district_id, entity_type, entity_id, influence, updated_at
+            ) VALUES (?, ?, 'user', ?, ?, ?)
+            ON CONFLICT(guild_id, district_id, entity_type, entity_id) DO UPDATE SET
+                influence = excluded.influence,
+                updated_at = excluded.updated_at
+            """,
+            (guild_id, district_id, str(user_id), value, now),
+        )
+
+    async def _district_ops_cooldown_error_no_lock(
+        self,
+        user_id: int,
+        guild_id: int,
+        action_type: str,
+        cooldown_seconds: float,
+        now: float,
+    ) -> dict[str, object] | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT last_used_at FROM business_action_cooldowns
+            WHERE guild_id = ? AND user_id = ? AND action_type = ?
+            """,
+            (guild_id, user_id, action_type),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        remaining = float(cooldown_seconds) - (now - float(row["last_used_at"]))
+        if remaining > 0:
+            return {"error": "cooldown", "retry_after": remaining}
+        return None
+
+    async def _touch_district_ops_cooldown_no_lock(
+        self, user_id: int, guild_id: int, action_type: str, now: float,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO business_action_cooldowns (guild_id, user_id, action_type, last_used_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, user_id, action_type) DO UPDATE SET
+                last_used_at = excluded.last_used_at
+            """,
+            (guild_id, user_id, action_type, now),
+        )
+
     async def list_district_influence(
         self, guild_id: int, district_id: str, *, limit: int = 5,
     ) -> list[tuple[str, str, float]]:
+        now = time.time()
+        scored_map: dict[tuple[str, str], float] = {}
         cursor = await self.conn.execute(
             """
             SELECT entity_type, entity_id, influence FROM district_influence
             WHERE guild_id = ? AND district_id = ? AND influence > 0
-            ORDER BY influence DESC
-            LIMIT ?
             """,
-            (guild_id, district_id, limit),
+            (guild_id, district_id),
         )
-        return [
-            (str(r["entity_type"]), str(r["entity_id"]), float(r["influence"]))
-            for r in await cursor.fetchall()
+        for r in await cursor.fetchall():
+            entity_type = str(r["entity_type"])
+            entity_id = str(r["entity_id"])
+            score = float(r["influence"])
+            if entity_type == "user" and entity_id.isdigit():
+                score = await self._user_effective_influence_no_lock(
+                    int(entity_id), guild_id, district_id, now,
+                )
+            if score > 0:
+                scored_map[(entity_type, entity_id)] = score
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id FROM district_influence_fortify
+            WHERE guild_id = ? AND district_id = ? AND expires_at > ? AND points > 0
+            """,
+            (guild_id, district_id, now),
+        )
+        for r in await cursor.fetchall():
+            uid = int(r["user_id"])
+            key = ("user", str(uid))
+            if key in scored_map:
+                continue
+            score = await self._user_effective_influence_no_lock(uid, guild_id, district_id, now)
+            if score > 0:
+                scored_map[key] = score
+        scored = [
+            (entity_type, entity_id, score)
+            for (entity_type, entity_id), score in scored_map.items()
         ]
+        scored.sort(key=lambda item: item[2], reverse=True)
+        return scored[: max(1, int(limit))]
+
+    async def get_district_war_control(
+        self, guild_id: int, district_id: str,
+    ) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT guild_id, district_id, crew_name, bonus_ends_at
+            FROM district_war_control
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild_id, district_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        if float(row["bonus_ends_at"] or 0) <= time.time():
+            return None
+        return row
+
+    async def get_district_war_suppress_until(
+        self, guild_id: int, district_id: str,
+    ) -> float:
+        now = time.time()
+        cursor = await self.conn.execute(
+            """
+            SELECT suppressed_until FROM district_war_suppress
+            WHERE guild_id = ? AND district_id = ?
+            """,
+            (guild_id, district_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return 0.0
+        until = float(row["suppressed_until"] or 0)
+        return until if until > now else 0.0
+
+    async def list_district_crew_influence(
+        self, guild_id: int, district_id: str, *, limit: int = 3,
+    ) -> list[tuple[str, float]]:
+        """Crew influence standings using effective (base + fortify) user scores."""
+        now = time.time()
+        user_ids: set[int] = set()
+        cursor = await self.conn.execute(
+            """
+            SELECT entity_id FROM district_influence
+            WHERE guild_id = ? AND district_id = ? AND entity_type = 'user'
+            """,
+            (guild_id, district_id),
+        )
+        for row in await cursor.fetchall():
+            if str(row["entity_id"]).isdigit():
+                user_ids.add(int(row["entity_id"]))
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id FROM district_influence_fortify
+            WHERE guild_id = ? AND district_id = ? AND expires_at > ? AND points > 0
+            """,
+            (guild_id, district_id, now),
+        )
+        for row in await cursor.fetchall():
+            user_ids.add(int(row["user_id"]))
+
+        totals: dict[str, float] = {}
+        for uid in user_ids:
+            crew = await self._crew_name_no_lock(uid, guild_id)
+            if crew is None:
+                continue
+            score = await self._user_effective_influence_no_lock(uid, guild_id, district_id, now)
+            if score <= 0:
+                continue
+            totals[crew] = totals.get(crew, 0.0) + score
+        ranked = sorted(totals.items(), key=lambda item: item[1], reverse=True)
+        return ranked[: max(1, int(limit))]
+
+    async def undermine_district_influence(
+        self,
+        user_id: int,
+        guild_id: int,
+        district_id: str,
+        points: int | None = None,
+    ) -> dict[str, object]:
+        from utils.districts import district_by_id
+
+        if district_by_id(district_id) is None:
+            return {"error": "invalid_district"}
+        pts = int(points if points is not None else config.DISTRICT_UNDERMINE_DEFAULT_POINTS)
+        pts = max(1, min(pts, int(config.DISTRICT_UNDERMINE_MAX_POINTS)))
+        cost = pts * float(config.DISTRICT_UNDERMINE_COST_PER_POINT)
+        now = time.time()
+        async with self._write_lock:
+            cd_err = await self._district_ops_cooldown_error_no_lock(
+                user_id, guild_id, "district_undermine",
+                config.DISTRICT_UNDERMINE_COOLDOWN_SECONDS, now,
+            )
+            if cd_err is not None:
+                await self.conn.commit()
+                return cd_err
+            standings = await self.list_district_influence(guild_id, district_id, limit=10)
+            target_id: int | None = None
+            for entity_type, entity_id, _score in standings:
+                if entity_type != "user" or not entity_id.isdigit():
+                    continue
+                candidate = int(entity_id)
+                if candidate != user_id:
+                    target_id = candidate
+                    break
+            if target_id is None:
+                await self.conn.commit()
+                return {"error": "no_target"}
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < cost:
+                await self.conn.commit()
+                return {"error": "insufficient_funds", "cost": cost}
+            target_base = await self._user_base_influence_no_lock(target_id, guild_id, district_id)
+            if target_base <= 0:
+                await self.conn.commit()
+                return {"error": "no_target"}
+            removed = min(float(pts), target_base)
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (cost, user_id, guild_id),
+            )
+            await self._set_user_base_influence_no_lock(
+                target_id, guild_id, district_id, target_base - removed, now,
+            )
+            await self._touch_district_ops_cooldown_no_lock(
+                user_id, guild_id, "district_undermine", now,
+            )
+            await self.conn.commit()
+        return {
+            "error": None,
+            "cost": cost,
+            "removed": removed,
+            "target_id": target_id,
+            "district_id": district_id,
+        }
+
+    async def fortify_district_influence(
+        self,
+        user_id: int,
+        guild_id: int,
+        district_id: str,
+        points: int | None = None,
+    ) -> dict[str, object]:
+        from utils.districts import district_by_id
+
+        if district_by_id(district_id) is None:
+            return {"error": "invalid_district"}
+        pts = int(points if points is not None else config.DISTRICT_FORTIFY_DEFAULT_POINTS)
+        pts = max(1, min(pts, int(config.DISTRICT_FORTIFY_MAX_POINTS)))
+        cost = pts * float(config.DISTRICT_FORTIFY_COST_PER_POINT)
+        now = time.time()
+        expires = now + float(config.DISTRICT_FORTIFY_DURATION_SECONDS)
+        async with self._write_lock:
+            cd_err = await self._district_ops_cooldown_error_no_lock(
+                user_id, guild_id, "district_fortify",
+                config.DISTRICT_FORTIFY_COOLDOWN_SECONDS, now,
+            )
+            if cd_err is not None:
+                await self.conn.commit()
+                return cd_err
+            await self._ensure_user_no_lock(user_id, guild_id)
+            cursor = await self.conn.execute(
+                "SELECT wallet FROM users WHERE user_id = ? AND guild_id = ?",
+                (user_id, guild_id),
+            )
+            wallet_row = await cursor.fetchone()
+            if wallet_row is None or float(wallet_row["wallet"]) < cost:
+                await self.conn.commit()
+                return {"error": "insufficient_funds", "cost": cost}
+            current = await self._user_fortify_points_no_lock(user_id, guild_id, district_id, now)
+            new_points = min(float(config.DISTRICT_FORTIFY_MAX_POINTS), current + float(pts))
+            await self.conn.execute(
+                "UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?",
+                (cost, user_id, guild_id),
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO district_influence_fortify (
+                    guild_id, district_id, user_id, points, expires_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(guild_id, district_id, user_id) DO UPDATE SET
+                    points = excluded.points,
+                    expires_at = excluded.expires_at
+                """,
+                (guild_id, district_id, user_id, new_points, expires),
+            )
+            await self._touch_district_ops_cooldown_no_lock(
+                user_id, guild_id, "district_fortify", now,
+            )
+            await self.conn.commit()
+        return {
+            "error": None,
+            "cost": cost,
+            "points": new_points,
+            "expires_at": expires,
+            "district_id": district_id,
+        }
+
+    async def suppress_district_war(
+        self, user_id: int, guild_id: int, district_id: str,
+    ) -> dict[str, object]:
+        """Deed owner spends influence to suppress war income bonus for a while."""
+        from utils.districts import district_by_id
+
+        if district_by_id(district_id) is None:
+            return {"error": "invalid_district"}
+        deed = await self.get_district_deed(guild_id, district_id)
+        if deed is None or int(deed["owner_user_id"]) != user_id:
+            return {"error": "not_deed_owner"}
+        cost = float(config.DISTRICT_OWNER_SUPPRESS_COST)
+        now = time.time()
+        async with self._write_lock:
+            cd_err = await self._district_ops_cooldown_error_no_lock(
+                user_id, guild_id, "district_suppress",
+                config.DISTRICT_OWNER_SUPPRESS_COOLDOWN_SECONDS, now,
+            )
+            if cd_err is not None:
+                await self.conn.commit()
+                return cd_err
+            current = await self._user_base_influence_no_lock(user_id, guild_id, district_id)
+            if current < cost:
+                await self.conn.commit()
+                return {"error": "insufficient_influence", "have": current, "need": cost}
+            until = now + float(config.DISTRICT_OWNER_SUPPRESS_DURATION_SECONDS)
+            await self._set_user_base_influence_no_lock(
+                user_id, guild_id, district_id, current - cost, now,
+            )
+            await self.conn.execute(
+                """
+                INSERT INTO district_war_suppress (
+                    guild_id, district_id, suppressed_until, suppressed_by
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, district_id) DO UPDATE SET
+                    suppressed_until = excluded.suppressed_until,
+                    suppressed_by = excluded.suppressed_by
+                """,
+                (guild_id, district_id, until, user_id),
+            )
+            await self._touch_district_ops_cooldown_no_lock(
+                user_id, guild_id, "district_suppress", now,
+            )
+            await self.conn.commit()
+        return {
+            "error": None,
+            "influence_spent": cost,
+            "suppressed_until": until,
+            "district_id": district_id,
+        }
 
     async def buy_territory_guards(
         self,

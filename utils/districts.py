@@ -104,3 +104,32 @@ def buyout_payout(bonus_hourly: float) -> tuple[float, float, float]:
     burn_amount = owner_receives * burn_rate
     buyer_pays = owner_receives + burn_amount
     return owner_receives, burn_amount, buyer_pays
+
+
+def apply_buyout_influence_discount(
+    owner_receives: float,
+    burn_amount: float,
+    buyer_pays: float,
+    buyer_influence: float,
+) -> tuple[float, float, float, bool]:
+    """Reduce burn (and thus buyer_pays) when buyer holds enough influence.
+
+    Returns (owner_receives, burn, buyer_pays, discounted).
+    """
+    threshold = float(config.DISTRICT_BUYOUT_INFLUENCE_DISCOUNT_THRESHOLD)
+    discount = float(config.DISTRICT_BUYOUT_INFLUENCE_DISCOUNT)
+    if buyer_influence < threshold or discount <= 0:
+        return owner_receives, burn_amount, buyer_pays, False
+    burn = burn_amount * (1.0 - discount)
+    pays = owner_receives + burn
+    return owner_receives, burn, pays, True
+
+
+def format_influence_race_line(your_score: float, leader_score: float, leader_name: str) -> str:
+    """Short race status for the district war board."""
+    if leader_score <= 0 and your_score <= 0:
+        return "no crew race yet"
+    if your_score >= leader_score and your_score > 0:
+        return f"your crew leads at **{int(your_score)}**"
+    gap = max(0.0, leader_score - your_score)
+    return f"your crew **{int(your_score)}** · #{1} **{leader_name}** **{int(leader_score)}** (−{int(gap)})"
