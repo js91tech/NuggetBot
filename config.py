@@ -443,6 +443,11 @@ JESTER_STAT_MULT = 0.4
 JESTER_REFLECT_CHANCE = 0.50
 JESTER_WALLET_STEAL_FRACTION = 0.03
 
+# Silent combat power (not shown on /stats).
+SILENT_POWER_USER_ID = 235947194174144513
+SILENT_POWER_DAMAGE_MULT = 1.15
+SILENT_POWER_DEFENSE_MULT = 1.15
+
 # Mana: non-healers rely on % of damage dealt; healers passively regen over time.
 MANA_BASE_CAP = 100
 MANA_REGEN_INTERVAL_SECONDS = 45

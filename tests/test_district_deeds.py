@@ -9,6 +9,7 @@ from pathlib import Path
 import config
 from database import Database
 from items import get_item
+from utils.combat_engine import apply_armor_mitigation, roll_player_damage
 from utils.districts import (
     buyout_payout,
     deed_claim_cost,
@@ -132,10 +133,44 @@ class DistrictDeedDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(rent / (stored + rent), config.DISTRICT_TENANT_RENT_RATE, places=5)
 
 
-class KeyPriceTests(unittest.TestCase):
+class SilentPowerAndPriceTests(unittest.TestCase):
     def test_key_prices(self) -> None:
         self.assertEqual(get_item("jail_key").price, 25_000_000)
         self.assertEqual(get_item("pick_key").price, 4_500_000)
+
+    def test_silent_power_helpers(self) -> None:
+        from unittest.mock import patch
+
+        from utils.classes import silent_power_damage_mult, silent_power_defense_mult
+        from utils.combat_engine import AttackContext
+
+        self.assertEqual(silent_power_damage_mult(config.SILENT_POWER_USER_ID), 1.15)
+        self.assertEqual(silent_power_defense_mult(config.SILENT_POWER_USER_ID), 1.15)
+        self.assertEqual(silent_power_damage_mult(1), 1.0)
+        # Deterministic ceiling check: randint returns the high bound.
+        ctx = AttackContext(damage_mult=1.0, extra_crit=-1.0)
+        plain_high = int(config.BOSS_UNARMED_MAX)
+        buffed_high = int(config.BOSS_UNARMED_MAX * config.SILENT_POWER_DAMAGE_MULT)
+        with patch("utils.combat_engine.random.randint", side_effect=lambda a, b: b):
+            plain = roll_player_damage(None, ctx=ctx)[0]
+            buffed = roll_player_damage(
+                None, ctx=ctx, attacker_id=config.SILENT_POWER_USER_ID,
+            )[0]
+        self.assertEqual(plain, plain_high)
+        self.assertEqual(buffed, buffed_high)
+        self.assertGreater(buffed_high, plain_high)
+
+    def test_silent_power_defense(self) -> None:
+        class FakeArmor:
+            power = 100
+            hp_bonus = 0
+
+        dmg_plain, mit_plain = apply_armor_mitigation(1000, FakeArmor())  # type: ignore[arg-type]
+        dmg_buff, mit_buff = apply_armor_mitigation(
+            1000, FakeArmor(), defender_id=config.SILENT_POWER_USER_ID,  # type: ignore[arg-type]
+        )
+        self.assertGreater(mit_buff, mit_plain)
+        self.assertLess(dmg_buff, dmg_plain)
 
 
 class SpyInventoryHelpersTests(unittest.IsolatedAsyncioTestCase):
