@@ -1071,7 +1071,7 @@ class DashboardServer:
             <p class="admin-warning">Silent inventory tools — the player is never notified.</p>
             <label>
               <span>Discord user ID</span>
-              <input type="text" class="spy-user-id" name="user_id" placeholder="e.g. 235947194174144513" required>
+              <input type="text" class="spy-user-id" name="user_id" placeholder="e.g. Discord user ID" required>
             </label>
             <button type="button" class="spy-load-btn">Load inventory</button>
             <p class="spy-status" aria-live="polite"></p>

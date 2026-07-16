@@ -1,8 +1,9 @@
 """Interactive district map: deeds, war board, and influence ops."""
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 
@@ -35,6 +36,12 @@ def _format_eta(seconds: float) -> str:
     return f"{minutes}m"
 
 
+def _clip_field(value: str, limit: int = 1024) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1] + "…"
+
+
 async def build_district_payload(
     cog: commands.Cog,
     guild: discord.Guild,
@@ -51,15 +58,32 @@ async def build_district_payload(
     return embed, files
 
 
+async def _district_field_data(
+    cog: commands.Cog,
+    guild: discord.Guild,
+    district_id: str,
+) -> tuple[Any, Any, float, list[tuple[str, float]]]:
+    """Parallel-friendly fetch for one district's war/influence panel bits."""
+    top, control, suppress_until, crew_standings = await asyncio.gather(
+        cog.bot.db.list_district_influence(guild.id, district_id, limit=3),
+        cog.bot.db.get_district_war_control(guild.id, district_id),
+        cog.bot.db.get_district_war_suppress_until(guild.id, district_id),
+        cog.bot.db.list_district_crew_influence(guild.id, district_id, limit=3),
+    )
+    return top, control, suppress_until, crew_standings
+
+
 async def build_district_embed(
     cog: commands.Cog,
     guild: discord.Guild,
     user_id: int,
 ) -> discord.Embed:
-    row = await cog.bot.db.get_business(user_id, guild.id)
+    row, deeds, my_crew = await asyncio.gather(
+        cog.bot.db.get_business(user_id, guild.id),
+        cog.bot.db.list_district_deeds(guild.id),
+        cog.bot.db.get_crew_membership(user_id, guild.id),
+    )
     current = str(row["district_id"]) if row is not None and row["district_id"] else None
-    deeds = await cog.bot.db.list_district_deeds(guild.id)
-    my_crew = await cog.bot.db.get_crew_membership(user_id, guild.id)
     now = time.time()
 
     embed = discord.Embed(
@@ -74,8 +98,15 @@ async def build_district_embed(
         ),
         color=discord.Color.teal(),
     )
-    for defn in DISTRICT_MAP.values():
-        top = await cog.bot.db.list_district_influence(guild.id, defn.district_id, limit=3)
+
+    district_defs = list(DISTRICT_MAP.values())
+    snapshots = await asyncio.gather(
+        *[_district_field_data(cog, guild, defn.district_id) for defn in district_defs]
+    )
+
+    for defn, (top, control, suppress_until, crew_standings) in zip(
+        district_defs, snapshots, strict=True,
+    ):
         top_lines = []
         for entity_type, entity_id, influence in top:
             if entity_type == "user":
@@ -96,19 +127,9 @@ async def build_district_embed(
             yours = " **(you)**" if owner_id == user_id else ""
             owner_text = f"**{owner_name}**{yours}"
             if owner_id != user_id:
-                _, _, buyer_pays, err = await cog.bot.db.preview_district_buyout(
-                    guild.id, defn.district_id, buyer_id=user_id,
-                )
-                if err is None:
-                    owner_text += f" · buyout **{fmt_amount(buyer_pays)}**"
+                # Avoid heavy buyout preview on panel open (was causing interaction timeouts).
+                owner_text += " · hostile buyout available"
 
-        control = await cog.bot.db.get_district_war_control(guild.id, defn.district_id)
-        suppress_until = await cog.bot.db.get_district_war_suppress_until(
-            guild.id, defn.district_id,
-        )
-        crew_standings = await cog.bot.db.list_district_crew_influence(
-            guild.id, defn.district_id, limit=3,
-        )
         your_crew_score = 0.0
         if my_crew:
             for crew_name, score in crew_standings:
@@ -143,7 +164,7 @@ async def build_district_embed(
             )
         embed.add_field(
             name=f"{defn.emoji} {defn.name}{here}",
-            value=(
+            value=_clip_field(
                 f"{defn.label} · owner mult x**{defn.income_mult:.2f}**{tenant_note}\n"
                 f"Deed: {owner_text}\n"
                 f"{war_line}\n"
@@ -190,6 +211,11 @@ async def _announce_district_event(
         return
 
 
+async def _ensure_deferred(interaction: discord.Interaction) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+
+
 async def _refresh_map(
     interaction: discord.Interaction,
     cog: commands.Cog,
@@ -197,12 +223,16 @@ async def _refresh_map(
     *,
     description: str | None = None,
 ) -> None:
+    await _ensure_deferred(interaction)
     guild = interaction.guild
+    if guild is None:
+        await interaction.followup.send("Guild only.", ephemeral=True)
+        return
     view = DistrictMapView(cog, guild.id, user_id)
     embed, files = await build_district_payload(cog, guild, user_id)
     if description:
         embed.description = description
-    await interaction.response.edit_message(embed=embed, view=view, attachments=files)
+    await interaction.edit_original_response(embed=embed, view=view, attachments=files)
 
 
 class RelocateSelect(discord.ui.Select):
@@ -226,6 +256,7 @@ class RelocateSelect(discord.ui.Select):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        await _ensure_deferred(interaction)
         district_id = self.values[0]
         cost, err = await self.cog.bot.db.relocate_business(
             self.user_id, self.guild_id, district_id,
@@ -239,7 +270,7 @@ class RelocateSelect(discord.ui.Select):
             "insufficient_funds": f"You need **{fmt_amount(cost)}** to relocate.",
         }
         if err:
-            await interaction.response.send_message(messages.get(err, err), ephemeral=True)
+            await interaction.followup.send(messages.get(err, err), ephemeral=True)
             return
         await record_quest_event(
             self.cog.bot.db, self.guild_id, self.user_id, "business_relocate",
@@ -277,6 +308,7 @@ class ClaimDeedSelect(discord.ui.Select):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        await _ensure_deferred(interaction)
         district_id = self.values[0]
         cost, err = await self.cog.bot.db.claim_district_deed(
             self.user_id, self.guild_id, district_id,
@@ -289,7 +321,7 @@ class ClaimDeedSelect(discord.ui.Select):
             "insufficient_funds": f"You need **{fmt_amount(cost)}** to claim this deed.",
         }
         if err:
-            await interaction.response.send_message(messages.get(err, err), ephemeral=True)
+            await interaction.followup.send(messages.get(err, err), ephemeral=True)
             return
         await _refresh_map(
             interaction,
@@ -323,6 +355,7 @@ class BuyoutDeedSelect(discord.ui.Select):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        await _ensure_deferred(interaction)
         district_id = self.values[0]
         paid, received, burned, err = await self.cog.bot.db.buyout_district_deed(
             self.user_id, self.guild_id, district_id,
@@ -336,7 +369,7 @@ class BuyoutDeedSelect(discord.ui.Select):
             "insufficient_funds": f"You need **{fmt_amount(paid)}** for this buyout.",
         }
         if err:
-            await interaction.response.send_message(messages.get(err, err), ephemeral=True)
+            await interaction.followup.send(messages.get(err, err), ephemeral=True)
             return
         await _refresh_map(
             interaction,
@@ -366,24 +399,25 @@ class InfluenceModal(discord.ui.Modal, title="Expand influence"):
         self.district_id = district_id
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        await _ensure_deferred(interaction)
         try:
             amount = int(str(self.points.value).strip())
         except ValueError:
-            await interaction.response.send_message("Enter a whole number.", ephemeral=True)
+            await interaction.followup.send("Enter a whole number.", ephemeral=True)
             return
         if amount <= 0:
-            await interaction.response.send_message("Enter a positive amount.", ephemeral=True)
+            await interaction.followup.send("Enter a positive amount.", ephemeral=True)
             return
         cost, new_inf, err = await self.cog.bot.db.expand_district_influence(
             self.user_id, self.guild_id, self.district_id, amount,
         )
         if err == "insufficient_funds":
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"You need **{fmt_amount(cost)}** for {amount} influence.", ephemeral=True,
             )
             return
         if err:
-            await interaction.response.send_message("Could not expand influence.", ephemeral=True)
+            await interaction.followup.send("Could not expand influence.", ephemeral=True)
             return
         await record_quest_event(
             self.cog.bot.db, self.guild_id, self.user_id, "business_influence",
@@ -507,11 +541,12 @@ class DistrictInfluenceOpsView(discord.ui.View):
     @discord.ui.button(label="Contest", style=discord.ButtonStyle.danger, row=0)
     async def contest_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
+        await _ensure_deferred(interaction)
         result = await self.cog.bot.db.contest_district_war(
             self.user_id, self.guild_id, self.district_id,
         )
         if result.get("error"):
-            await interaction.response.send_message(self._ops_error(result), ephemeral=True)
+            await interaction.followup.send(self._ops_error(result), ephemeral=True)
             return
         defn = district_by_id(self.district_id)
         crew = str(result.get("crew_name"))
@@ -545,11 +580,12 @@ class DistrictInfluenceOpsView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
         del button
+        await _ensure_deferred(interaction)
         result = await self.cog.bot.db.undermine_district_influence(
             self.user_id, self.guild_id, self.district_id,
         )
         if result.get("error"):
-            await interaction.response.send_message(self._ops_error(result), ephemeral=True)
+            await interaction.followup.send(self._ops_error(result), ephemeral=True)
             return
         defn = district_by_id(self.district_id)
         target_id = int(result["target_id"])
@@ -582,11 +618,12 @@ class DistrictInfluenceOpsView(discord.ui.View):
     @discord.ui.button(label="Fortify", style=discord.ButtonStyle.success, row=1)
     async def fortify_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
+        await _ensure_deferred(interaction)
         result = await self.cog.bot.db.fortify_district_influence(
             self.user_id, self.guild_id, self.district_id,
         )
         if result.get("error"):
-            await interaction.response.send_message(self._ops_error(result), ephemeral=True)
+            await interaction.followup.send(self._ops_error(result), ephemeral=True)
             return
         defn = district_by_id(self.district_id)
         points = float(result.get("points") or 0)
@@ -611,11 +648,12 @@ class DistrictInfluenceOpsView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
         del button
+        await _ensure_deferred(interaction)
         result = await self.cog.bot.db.suppress_district_war(
             self.user_id, self.guild_id, self.district_id,
         )
         if result.get("error"):
-            await interaction.response.send_message(self._ops_error(result), ephemeral=True)
+            await interaction.followup.send(self._ops_error(result), ephemeral=True)
             return
         defn = district_by_id(self.district_id)
         until = float(result.get("suppressed_until") or 0)
@@ -667,8 +705,7 @@ class DistrictMapView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=4)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button
-        embed, files = await build_district_payload(self.cog, interaction.guild, self.user_id)
-        await interaction.response.edit_message(embed=embed, view=self, attachments=files)
+        await _refresh_map(interaction, self.cog, self.user_id)
 
 
 async def send_district_panel(interaction: discord.Interaction, cog: commands.Cog) -> None:
@@ -676,6 +713,7 @@ async def send_district_panel(interaction: discord.Interaction, cog: commands.Co
     if guild is None:
         await interaction.response.send_message("Guild only.", ephemeral=True)
         return
+    await interaction.response.defer()
     embed, files = await build_district_payload(cog, guild, interaction.user.id)
     view = DistrictMapView(cog, guild.id, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view, files=files)
+    await interaction.followup.send(embed=embed, view=view, files=files)
