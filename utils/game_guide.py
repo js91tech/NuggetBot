@@ -522,7 +522,8 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· `/drugs wholesale` — fixed-price NPC buyer, no raid risk (rank 7+)\n"
                     "· `/drugs catalog` — all strains, prices, and effects\n"
                     "· `/drugs stash` — your inventory and active buffs\n"
-                    "· `/drugs use` — consume product from stash",
+                    "· `/drugs use` — consume product from stash\n"
+                    "· `/drugs gift` — give stash product to another player",
                     "**Strains**\n" + "\n".join(drug_lines),
                     "**Selling**\n"
                     "· **Street** (lab panel) — instant sale at a volatile price, but a "

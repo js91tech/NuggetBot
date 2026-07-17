@@ -17,6 +17,7 @@ from utils.drug_ui import (
     send_drug_market_panel,
 )
 from utils.drug_messages import consume_error_message, wholesale_error_message
+from utils.bot_players import pvp_target_error
 from utils.drugs import drug_by_id
 from utils.helpers import fmt_amount, guild_only_message
 from utils.quests import record_quest_event
@@ -141,6 +142,61 @@ class Drugs(commands.Cog):
             return
         await record_quest_event(self.bot.db, interaction.guild_id, interaction.user.id, "drug_use")
         await interaction.response.send_message(format_consume_message(result), ephemeral=True)
+
+    @drugs_group.command(
+        name="gift",
+        description="Gift harvested product from your stash to another player.",
+    )
+    @app_commands.describe(
+        user="Player to receive the gift",
+        product="Product in your stash to gift",
+        quantity="How many units to send (1–99)",
+    )
+    @app_commands.autocomplete(product=drug_autocomplete)
+    async def gift(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        product: str,
+        quantity: app_commands.Range[int, 1, 99] = 1,
+    ) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        gift_err = pvp_target_error(user, interaction.user.id)
+        if gift_err:
+            await interaction.response.send_message(gift_err, ephemeral=True)
+            return
+        drug_id = product.strip().lower()
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            await interaction.response.send_message("Unknown product.", ephemeral=True)
+            return
+        qty = int(quantity)
+        err = await self.bot.db.gift_drug_units(
+            interaction.user.id, user.id, interaction.guild_id, drug_id, qty,
+        )
+        if err == "insufficient_items":
+            await interaction.response.send_message(
+                f"You need **{qty}×** **{defn.name}** in your stash.",
+                ephemeral=True,
+            )
+            return
+        if err == "self_gift":
+            await interaction.response.send_message(
+                "Gift them to someone else!", ephemeral=True,
+            )
+            return
+        if err:
+            await interaction.response.send_message(
+                "Could not complete the gift.", ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f"{interaction.user.mention} gifted **{qty}×** {defn.emoji} **{defn.name}** "
+            f"to {user.mention}!",
+            allowed_mentions=discord.AllowedMentions(users=True),
+        )
 
     @drugs_group.command(
         name="unlist",

@@ -23,12 +23,12 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
         "**/crew** — corporation panel (join, vault, loans, corporate upgrades, projects, war standings)\n"
         "**/territory** — map panel with guard hiring, zones, sieges\n"
         "**/business** — income, upgrades, tiers, districts, compete/defend, market, prestige & mega projects\n"
-        "**/drugs** — grow lab (plant/harvest/use), `/drugs catalog`, `/drugs stash`, street sales & black market\n"
+        "**/drugs** — grow lab (plant/harvest/use), `/drugs gift`, `/drugs catalog`, `/drugs stash`, street sales & black market\n"
     ),
     (
         "Character",
         "**/class** · **/cast** · **/mana** · **/aspects** · **/avatar** (upload custom)\n"
-        "**/use** — raid potion, energy drink, **Jail Key**, **Pick Key** · **/gift-item** — chia seeds\n"
+        "**/use** — raid potion, energy drink, **Jail Key**, **Pick Key** · **/gift-item** — chia seeds · **/drugs gift** — stash product\n"
         "**/attributes** — interactive stat panel (50 pt pool +5/prestige; 15 + prestige/stat cap)\n"
         "**/profile** · **/stats** · **/inventory** · **/quests** · **/achievements** · **/fix** (unstable gear)\n"
         "**/guide** — full interactive systems + item catalog (dropdown UI)\n"

@@ -910,3 +910,58 @@ class DatabaseExpansionMixin:
                 )
             await self.conn.commit()
             return True
+
+    async def gift_drug_units(
+        self,
+        sender_id: int,
+        receiver_id: int,
+        guild_id: int,
+        drug_id: str,
+        quantity: int = 1,
+    ) -> str | None:
+        """Move stash product from sender to receiver. Returns error code or None."""
+        if sender_id == receiver_id:
+            return "self_gift"
+        from utils.drugs import drug_by_id
+
+        defn = drug_by_id(drug_id)
+        if defn is None:
+            return "invalid_drug"
+        qty = max(1, min(int(quantity), config.SHOP_MAX_BUY_QUANTITY))
+        async with self._write_lock:
+            await self._ensure_user_no_lock(sender_id, guild_id)
+            await self._ensure_user_no_lock(receiver_id, guild_id)
+            stored_id, available = await self._find_drug_inventory_qty(
+                sender_id, guild_id, defn.drug_id,
+            )
+            if stored_id is None or available < qty:
+                await self.conn.commit()
+                return "insufficient_items"
+            remaining = available - qty
+            if remaining <= 0:
+                await self.conn.execute(
+                    """
+                    DELETE FROM drug_inventory
+                    WHERE guild_id = ? AND user_id = ? AND drug_id = ?
+                    """,
+                    (guild_id, sender_id, stored_id),
+                )
+            else:
+                await self.conn.execute(
+                    """
+                    UPDATE drug_inventory SET quantity = ?
+                    WHERE guild_id = ? AND user_id = ? AND drug_id = ?
+                    """,
+                    (remaining, guild_id, sender_id, stored_id),
+                )
+            await self.conn.execute(
+                """
+                INSERT INTO drug_inventory (user_id, guild_id, drug_id, quantity)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, guild_id, drug_id) DO UPDATE SET
+                    quantity = drug_inventory.quantity + excluded.quantity
+                """,
+                (receiver_id, guild_id, defn.drug_id, qty),
+            )
+            await self.conn.commit()
+        return None
