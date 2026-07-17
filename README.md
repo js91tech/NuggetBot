@@ -218,9 +218,9 @@ All dashboard commands require Discord administrator permission.
 
 | Command | Description |
 |---------|-------------|
-| `/gift @user amount` | Give nuggets to one user from thin air |
-| `/gift-all amount` | Give nuggets to every human in the server |
-| `/set-currency @user amount` | Set a user's wallet to an exact amount |
+| `/admin gift @user amount` | Give nuggets to one user (restricted operator) |
+| `/admin gift-all amount` | Give nuggets to every human (restricted operator) |
+| `/admin set-currency @user amount` | Set a user's wallet exactly (restricted operator) |
 | `/reset-user @user` | Wipe a user's wallet and stats |
 | `/config` | View all live tuneable settings |
 | `/config setting value` | Change a setting live for this server |

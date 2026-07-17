@@ -9,10 +9,12 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
+from utils.classes import is_silent_power_user
 from utils.helpers import fmt_amount, guild_only_message, valid_amount
 
 CONFIG_CHOICES = list(config.LIVE_SETTINGS)
 MAX_CURRENCY_AMOUNT = 1_000_000_000_000.0
+ADMIN_GRANT_DENIED = "You don't have permission to use this command."
 
 
 def _format_config_value(value: float) -> str:
@@ -21,6 +23,14 @@ def _format_config_value(value: float) -> str:
 
 def _custom_marker(setting: str, custom_settings: set[str]) -> str:
     return "custom" if setting in custom_settings else "default"
+
+
+def can_use_discord_admin_grants(user_id: int) -> bool:
+    """Discord free-grant admin commands are limited to the silent-power user.
+
+    Dashboard inventory grants stay available to anyone with dashboard access.
+    """
+    return is_silent_power_user(user_id)
 
 
 class Admin(commands.Cog):
@@ -52,6 +62,14 @@ class Admin(commands.Cog):
     def _valid_currency_amount(amount: float, *, allow_zero: bool = False) -> bool:
         minimum = 0.0 if allow_zero else 0.01
         return valid_amount(amount, minimum=minimum) and amount <= MAX_CURRENCY_AMOUNT
+
+    async def _require_discord_admin_grants(
+        self, interaction: discord.Interaction,
+    ) -> bool:
+        if can_use_discord_admin_grants(interaction.user.id):
+            return True
+        await interaction.response.send_message(ADMIN_GRANT_DENIED, ephemeral=True)
+        return False
 
     async def _human_members(self, guild: discord.Guild) -> list[discord.Member]:
         try:
@@ -92,6 +110,8 @@ class Admin(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
+        if not await self._require_discord_admin_grants(interaction):
+            return
         if user.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Choose a human user.", ephemeral=True)
             return
@@ -112,6 +132,8 @@ class Admin(commands.Cog):
     async def gift_all(self, interaction: discord.Interaction, amount: float) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not await self._require_discord_admin_grants(interaction):
             return
         if not self._valid_currency_amount(amount):
             await interaction.response.send_message("Enter a positive, reasonable amount.", ephemeral=True)
@@ -136,6 +158,8 @@ class Admin(commands.Cog):
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        if not await self._require_discord_admin_grants(interaction):
             return
         if user.bot and not config.ALLOW_BOT_PLAYERS:
             await interaction.response.send_message("Choose a human user.", ephemeral=True)
