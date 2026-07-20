@@ -47,6 +47,7 @@ COGS = (
     "cogs.alchemy",
     "cogs.relics",
     "cogs.companions",
+    "cogs.pet_duels",
     "cogs.codex",
     "cogs.contracts",
     "cogs.museum",

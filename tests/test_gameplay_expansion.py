@@ -95,7 +95,9 @@ class ExpansionDatabaseTests(unittest.IsolatedAsyncioTestCase):
         gid, uid = 1, 42
         await self.db.ensure_user(uid, gid)
         self.assertTrue(await self.db.grant_companion(uid, gid, "hench_scrap_gnome"))
-        self.assertTrue(await self.db.equip_companion(uid, gid, "hench_scrap_gnome"))
+        ok, err = await self.db.equip_companion(uid, gid, "hench_scrap_gnome")
+        self.assertTrue(ok)
+        self.assertIsNone(err)
 
     async def test_contract_progress(self) -> None:
         gid, uid = 1, 42

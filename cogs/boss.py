@@ -57,6 +57,7 @@ from utils.boss_mechanics import (
     roll_counter_damage,
 )
 from utils.boss_ui import BossAttackResult, BossFightView, send_boss_fight_panel
+from utils.companion_raid import announce_companion_strikes, run_companion_raid_tick
 from utils.combat_engine import (
     attack_context_for_class,
     roll_jester_reflect,
@@ -104,10 +105,12 @@ class Boss(commands.Cog):
         self._auto_spawn_due_at: dict[int, float] = {}
         self.auto_spawn.start()
         self.passive_boss_decay_tick.start()
+        self.companion_raid_tick.start()
 
     def cog_unload(self) -> None:
         self.auto_spawn.cancel()
         self.passive_boss_decay_tick.cancel()
+        self.companion_raid_tick.cancel()
 
     async def _boss_hp(self, guild_id: int, variant: str) -> float:
         circulation = await self.bot.db.total_circulation(guild_id)
@@ -1015,6 +1018,28 @@ class Boss(commands.Cog):
 
     @passive_boss_decay_tick.before_loop
     async def before_passive_boss_decay_tick(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=config.COMPANION_ATTACK_TICK_SECONDS)
+    async def companion_raid_tick(self) -> None:
+        guild_ids = await self.bot.db.list_active_boss_guild_ids()
+        if not guild_ids:
+            return
+        pause = config.BACKGROUND_GUILD_PAUSE_SECONDS
+        for guild_id in guild_ids:
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            try:
+                strikes = await run_companion_raid_tick(self, guild)
+                await announce_companion_strikes(self, guild, strikes)
+            except Exception:
+                logging.exception("Companion raid tick failed for guild %s", guild_id)
+            if pause > 0:
+                await asyncio.sleep(pause)
+
+    @companion_raid_tick.before_loop
+    async def before_companion_raid_tick(self) -> None:
         await self.bot.wait_until_ready()
 
     @app_commands.command(

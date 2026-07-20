@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import config
+
 
 @dataclass(frozen=True)
 class ShopItem:
@@ -537,6 +539,18 @@ ENERGY_DRINK = ShopItem(
     "Use with /use: restores 15 job energy instantly.",
     shop_listed=True,
 )
+COMPANION_STAMINA_PACK = ShopItem(
+    "companion_stamina_pack",
+    "Companion Stamina Pack",
+    "consumable",
+    int(config.COMPANION_STAMINA_PACK_PRICE),
+    0,
+    (
+        "Restores 25 companion stamina. Buy from /shop, then "
+        "/companion feed <id> or use from /use panel."
+    ),
+    shop_listed=True,
+)
 CHIA_SEEDS = ShopItem(
     "chia_seeds",
     "Chia Seeds",
@@ -786,6 +800,7 @@ CONSUMABLES: tuple[ShopItem, ...] = (
     HP_POTION_LARGE,
     HP_POTION_XXL,
     ENERGY_DRINK,
+    COMPANION_STAMINA_PACK,
     CHIA_SEEDS,
     JAIL_KEY,
     PICK_KEY,

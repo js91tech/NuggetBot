@@ -68,7 +68,7 @@ class DatabaseExpansionMixin:
                 guild_id BIGINT NOT NULL,
                 user_id BIGINT NOT NULL,
                 companion_id TEXT NOT NULL,
-                PRIMARY KEY (guild_id, user_id)
+                PRIMARY KEY (guild_id, user_id, companion_id)
             )
             """,
             """
@@ -182,6 +182,7 @@ class DatabaseExpansionMixin:
         for sql in tables:
             await self.conn.execute(sql)
         await self.conn.commit()
+        await self._migrate_companion_combat()
 
     # --- Blueprints ---
     async def unlock_blueprint(self, user_id: int, guild_id: int, blueprint_id: str) -> bool:
@@ -330,6 +331,123 @@ class DatabaseExpansionMixin:
         )
         return await cursor.fetchall()
 
+    async def _migrate_companion_combat(self) -> None:
+        """Companion combat state columns and multi-equip support."""
+        cols = [
+            ("custom_name", "TEXT"),
+            ("rename_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("evolution_tier", "INTEGER NOT NULL DEFAULT 1"),
+            ("stamina", f"INTEGER NOT NULL DEFAULT {config.COMPANION_BASE_STAMINA}"),
+            ("stamina_updated_at", "REAL"),
+        ]
+        if self.is_postgres:
+            for col, typedef in cols:
+                cursor = await self.conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(true))
+                      AND table_name = 'companion_collection' AND column_name = ?
+                    """,
+                    (col,),
+                )
+                if await cursor.fetchone() is None:
+                    await self.conn.execute(
+                        f"ALTER TABLE companion_collection ADD COLUMN {col} {typedef}",
+                    )
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(companion_collection)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for col, typedef in cols:
+                if col not in existing:
+                    await self.conn.execute(
+                        f"ALTER TABLE companion_collection ADD COLUMN {col} {typedef}",
+                    )
+
+        now = time.time()
+        await self.conn.execute(
+            """
+            UPDATE companion_collection
+            SET stamina_updated_at = ?
+            WHERE stamina_updated_at IS NULL OR stamina_updated_at = 0
+            """,
+            (now,),
+        )
+
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                WHERE tc.table_schema = ANY (current_schemas(true))
+                  AND tc.table_name = 'equipped_companion'
+                  AND tc.constraint_type = 'PRIMARY KEY'
+                ORDER BY kcu.ordinal_position
+                """,
+            )
+            pk_cols = [row[0] if not isinstance(row, dict) else row["column_name"] for row in await cursor.fetchall()]
+            if pk_cols == ["guild_id", "user_id"]:
+                await self.conn.execute(
+                    """
+                    CREATE TABLE equipped_companion_mig (
+                        guild_id BIGINT NOT NULL,
+                        user_id BIGINT NOT NULL,
+                        companion_id TEXT NOT NULL,
+                        PRIMARY KEY (guild_id, user_id, companion_id)
+                    )
+                    """,
+                )
+                await self.conn.execute(
+                    """
+                    INSERT INTO equipped_companion_mig (guild_id, user_id, companion_id)
+                    SELECT guild_id, user_id, companion_id FROM equipped_companion
+                    ON CONFLICT DO NOTHING
+                    """,
+                )
+                await self.conn.execute("DROP TABLE equipped_companion")
+                await self.conn.execute("ALTER TABLE equipped_companion_mig RENAME TO equipped_companion")
+        else:
+            cursor = await self.conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='equipped_companion'",
+            )
+            ddl_row = await cursor.fetchone()
+            ddl = str(ddl_row[0]) if ddl_row else ""
+            if ddl and "PRIMARY KEY (guild_id, user_id, companion_id)" not in ddl:
+                await self.conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS equipped_companion_new (
+                        guild_id BIGINT NOT NULL,
+                        user_id BIGINT NOT NULL,
+                        companion_id TEXT NOT NULL,
+                        PRIMARY KEY (guild_id, user_id, companion_id)
+                    )
+                    """,
+                )
+                await self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO equipped_companion_new (guild_id, user_id, companion_id)
+                    SELECT guild_id, user_id, companion_id FROM equipped_companion
+                    """,
+                )
+                await self.conn.execute("DROP TABLE equipped_companion")
+                await self.conn.execute(
+                    "ALTER TABLE equipped_companion_new RENAME TO equipped_companion",
+                )
+
+        await self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS companion_pet_duel_cooldowns (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                last_duel_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )
+            """,
+        )
+        await self.conn.commit()
+
     # --- Companions ---
     async def grant_companion(self, user_id: int, guild_id: int, companion_id: str) -> bool:
         if companion_id not in COMPANION_DEFINITIONS:
@@ -339,10 +457,10 @@ class DatabaseExpansionMixin:
             cursor = await self.conn.execute(
                 """
                 INSERT OR IGNORE INTO companion_collection
-                    (guild_id, user_id, companion_id, obtained_at)
-                VALUES (?, ?, ?, ?)
+                    (guild_id, user_id, companion_id, obtained_at, stamina, stamina_updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (guild_id, user_id, companion_id, now),
+                (guild_id, user_id, companion_id, now, config.COMPANION_BASE_STAMINA, now),
             )
             await self.conn.commit()
             return cursor.rowcount > 0
@@ -350,7 +468,9 @@ class DatabaseExpansionMixin:
     async def list_companions(self, user_id: int, guild_id: int) -> list[aiosqlite.Row]:
         cursor = await self.conn.execute(
             """
-            SELECT companion_id, obtained_at FROM companion_collection
+            SELECT companion_id, obtained_at, custom_name, rename_count,
+                   evolution_tier, stamina, stamina_updated_at
+            FROM companion_collection
             WHERE guild_id = ? AND user_id = ?
             ORDER BY obtained_at DESC
             """,
@@ -358,18 +478,54 @@ class DatabaseExpansionMixin:
         )
         return await cursor.fetchall()
 
-    async def get_equipped_companion_id(self, user_id: int, guild_id: int) -> str | None:
+    async def get_companion_row(
+        self, user_id: int, guild_id: int, companion_id: str,
+    ) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT companion_id, obtained_at, custom_name, rename_count,
+                   evolution_tier, stamina, stamina_updated_at
+            FROM companion_collection
+            WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+            """,
+            (guild_id, user_id, companion_id),
+        )
+        return await cursor.fetchone()
+
+    async def list_equipped_companion_ids(self, user_id: int, guild_id: int) -> list[str]:
         cursor = await self.conn.execute(
             """
             SELECT companion_id FROM equipped_companion
             WHERE guild_id = ? AND user_id = ?
+            ORDER BY companion_id ASC
             """,
             (guild_id, user_id),
         )
-        row = await cursor.fetchone()
-        return str(row["companion_id"]) if row else None
+        rows = await cursor.fetchall()
+        return [str(row["companion_id"]) for row in rows]
 
-    async def equip_companion(self, user_id: int, guild_id: int, companion_id: str) -> bool:
+    async def get_equipped_companion_id(self, user_id: int, guild_id: int) -> str | None:
+        ids = await self.list_equipped_companion_ids(user_id, guild_id)
+        return ids[0] if ids else None
+
+    async def list_guild_equipped_companions(self, guild_id: int) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT e.user_id, e.companion_id,
+                   c.custom_name, c.evolution_tier, c.stamina, c.stamina_updated_at
+            FROM equipped_companion e
+            JOIN companion_collection c
+              ON c.guild_id = e.guild_id
+             AND c.user_id = e.user_id
+             AND c.companion_id = e.companion_id
+            WHERE e.guild_id = ?
+            ORDER BY e.user_id ASC, e.companion_id ASC
+            """,
+            (guild_id,),
+        )
+        return await cursor.fetchall()
+
+    async def equip_companion(self, user_id: int, guild_id: int, companion_id: str) -> tuple[bool, str | None]:
         cursor = await self.conn.execute(
             """
             SELECT 1 FROM companion_collection
@@ -378,26 +534,216 @@ class DatabaseExpansionMixin:
             (guild_id, user_id, companion_id),
         )
         if await cursor.fetchone() is None:
-            return False
+            return False, "not_owned"
+        equipped = await self.list_equipped_companion_ids(user_id, guild_id)
+        if companion_id in equipped:
+            return False, "already_equipped"
+        if len(equipped) >= config.COMPANION_MAX_EQUIP:
+            return False, "max_equipped"
         async with self._write_lock:
             await self.conn.execute(
                 """
-                INSERT OR REPLACE INTO equipped_companion (guild_id, user_id, companion_id)
+                INSERT OR IGNORE INTO equipped_companion (guild_id, user_id, companion_id)
                 VALUES (?, ?, ?)
                 """,
                 (guild_id, user_id, companion_id),
             )
             await self.conn.commit()
-            return True
+            return True, None
 
-    async def unequip_companion(self, user_id: int, guild_id: int) -> bool:
+    async def unequip_companion(
+        self, user_id: int, guild_id: int, companion_id: str | None = None,
+    ) -> bool:
         async with self._write_lock:
-            cursor = await self.conn.execute(
-                "DELETE FROM equipped_companion WHERE guild_id = ? AND user_id = ?",
-                (guild_id, user_id),
-            )
+            if companion_id is None:
+                cursor = await self.conn.execute(
+                    "DELETE FROM equipped_companion WHERE guild_id = ? AND user_id = ?",
+                    (guild_id, user_id),
+                )
+            else:
+                cursor = await self.conn.execute(
+                    """
+                    DELETE FROM equipped_companion
+                    WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                    """,
+                    (guild_id, user_id, companion_id),
+                )
             await self.conn.commit()
             return cursor.rowcount > 0
+
+    async def _refresh_companion_stamina_unlocked(
+        self,
+        user_id: int,
+        guild_id: int,
+        companion_id: str,
+        *,
+        now: float | None = None,
+    ) -> aiosqlite.Row | None:
+        from utils.companion_combat import apply_stamina_regen
+
+        row = await self.get_companion_row(user_id, guild_id, companion_id)
+        if row is None:
+            return None
+        now = time.time() if now is None else now
+        updated_at = float(row["stamina_updated_at"] or now)
+        refreshed, advanced_at = apply_stamina_regen(
+            int(row["stamina"]),
+            updated_at=updated_at,
+            now=now,
+        )
+        if refreshed != int(row["stamina"]) or advanced_at != updated_at:
+            await self.conn.execute(
+                """
+                UPDATE companion_collection
+                SET stamina = ?, stamina_updated_at = ?
+                WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                """,
+                (refreshed, advanced_at, guild_id, user_id, companion_id),
+            )
+            cursor = await self.conn.execute(
+                """
+                SELECT companion_id, obtained_at, custom_name, rename_count,
+                       evolution_tier, stamina, stamina_updated_at
+                FROM companion_collection
+                WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                """,
+                (guild_id, user_id, companion_id),
+            )
+            return await cursor.fetchone()
+        return row
+
+    async def refresh_companion_stamina(
+        self, user_id: int, guild_id: int, companion_id: str,
+    ) -> aiosqlite.Row | None:
+        async with self._write_lock:
+            row = await self._refresh_companion_stamina_unlocked(user_id, guild_id, companion_id)
+            await self.conn.commit()
+            return row
+
+    async def spend_companion_stamina(
+        self, user_id: int, guild_id: int, companion_id: str, amount: int,
+    ) -> bool:
+        if amount <= 0:
+            return True
+        async with self._write_lock:
+            row = await self._refresh_companion_stamina_unlocked(user_id, guild_id, companion_id)
+            if row is None:
+                return False
+            current = int(row["stamina"])
+            if current < amount:
+                return False
+            now = time.time()
+            await self.conn.execute(
+                """
+                UPDATE companion_collection
+                SET stamina = ?, stamina_updated_at = ?
+                WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                """,
+                (current - amount, now, guild_id, user_id, companion_id),
+            )
+            await self.conn.commit()
+            return True
+
+    async def add_companion_stamina(
+        self, user_id: int, guild_id: int, companion_id: str, amount: int,
+    ) -> int | None:
+        if amount <= 0:
+            return None
+        async with self._write_lock:
+            row = await self._refresh_companion_stamina_unlocked(user_id, guild_id, companion_id)
+            if row is None:
+                return None
+            new_stamina = int(row["stamina"]) + amount
+            now = time.time()
+            await self.conn.execute(
+                """
+                UPDATE companion_collection
+                SET stamina = ?, stamina_updated_at = ?
+                WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                """,
+                (new_stamina, now, guild_id, user_id, companion_id),
+            )
+            await self.conn.commit()
+            return new_stamina
+
+    async def rename_companion(
+        self, user_id: int, guild_id: int, companion_id: str, new_name: str,
+    ) -> tuple[bool, str | None]:
+        cleaned = new_name.strip()
+        if not cleaned or len(cleaned) > 24:
+            return False, "invalid_name"
+        row = await self.get_companion_row(user_id, guild_id, companion_id)
+        if row is None:
+            return False, "not_owned"
+        rename_count = int(row["rename_count"])
+        cost = 0.0 if rename_count == 0 else config.COMPANION_RENAME_COST
+        if cost > 0 and not await self.debit_wallet(user_id, guild_id, cost):
+            return False, "insufficient_funds"
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                UPDATE companion_collection
+                SET custom_name = ?, rename_count = rename_count + 1
+                WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                """,
+                (cleaned, guild_id, user_id, companion_id),
+            )
+            await self.conn.commit()
+        return True, None
+
+    async def evolve_companion(
+        self, user_id: int, guild_id: int, companion_id: str,
+    ) -> tuple[bool, str | None]:
+        row = await self.get_companion_row(user_id, guild_id, companion_id)
+        if row is None:
+            return False, "not_owned"
+        tier = int(row["evolution_tier"])
+        next_tier = tier + 1
+        if next_tier > config.COMPANION_MAX_EVOLUTION_TIER:
+            return False, "max_tier"
+        cost = config.COMPANION_EVOLUTION_COSTS.get(next_tier)
+        if cost is None:
+            return False, "max_tier"
+        if not await self.debit_wallet(user_id, guild_id, cost):
+            return False, "insufficient_funds"
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                UPDATE companion_collection
+                SET evolution_tier = ?
+                WHERE guild_id = ? AND user_id = ? AND companion_id = ?
+                """,
+                (next_tier, guild_id, user_id, companion_id),
+            )
+            await self.conn.commit()
+        return True, None
+
+    async def get_pet_duel_cooldown_remaining(self, user_id: int, guild_id: int) -> float:
+        cursor = await self.conn.execute(
+            """
+            SELECT last_duel_at FROM companion_pet_duel_cooldowns
+            WHERE guild_id = ? AND user_id = ?
+            """,
+            (guild_id, user_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return 0.0
+        remaining = float(row["last_duel_at"]) + config.COMPANION_PET_DUEL_COOLDOWN_SECONDS - time.time()
+        return max(0.0, remaining)
+
+    async def record_pet_duel(self, user_id: int, guild_id: int) -> None:
+        now = time.time()
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                INSERT INTO companion_pet_duel_cooldowns (guild_id, user_id, last_duel_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (guild_id, user_id) DO UPDATE SET last_duel_at = excluded.last_duel_at
+                """,
+                (guild_id, user_id, now),
+            )
+            await self.conn.commit()
 
     # --- Season tokens ---
     async def add_season_tokens(

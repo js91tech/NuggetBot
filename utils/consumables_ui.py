@@ -119,6 +119,27 @@ async def execute_use(
         new_energy = await cog.bot.db.add_energy(user_id, guild_id, 15)
         return None, f"**Energy Drink** — energy restored to **{new_energy}**."
 
+    if item_id == "companion_stamina_pack":
+        equipped = await cog.bot.db.list_equipped_companion_ids(user_id, guild_id)
+        if not equipped:
+            return "no_equipped_companion", None
+        if not await cog.bot.db.consume_inventory_item(user_id, guild_id, item_id):
+            return "consume_failed", None
+        restored: list[str] = []
+        for cid in equipped:
+            new_stamina = await cog.bot.db.add_companion_stamina(
+                user_id, guild_id, cid, config.COMPANION_STAMINA_PACK_RESTORE,
+            )
+            if new_stamina is not None:
+                restored.append(f"`{cid}` → **{new_stamina}**")
+        if not restored:
+            return "consume_failed", None
+        return None, (
+            f"**Companion Stamina Pack** — restored **"
+            f"{config.COMPANION_STAMINA_PACK_RESTORE}** stamina to active henchlings:\n"
+            + "\n".join(restored)
+        )
+
     if item_id in HP_POTION_HEAL:
         if not await cog.bot.db.consume_inventory_item(user_id, guild_id, item_id):
             return "consume_failed", None
@@ -167,6 +188,7 @@ def use_error_message(code: str | None) -> str:
         "insufficient_items": "You do not have that item.",
         "insufficient_product": "You don't have that product in your stash.",
         "not_jailed": "You are not in jail — save keys for when you get arrested.",
+        "no_equipped_companion": "Equip a henchling with `/companion equip` first, or use `/companion feed`.",
         "consume_failed": "Could not consume item.",
         "invalid_drug": "Unknown product.",
     }.get(code or "", "Could not use that item.")
