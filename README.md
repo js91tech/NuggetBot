@@ -2,7 +2,7 @@
 
 A fan-made web app to **search Palworld resources** and find out **how** and **where** to get them on Palpagos Islands.
 
-![Palworld Companion](https://img.shields.io/badge/Palworld-Companion-4ade80?style=flat-square)
+**Live demo:** Deploy via [Vercel](https://vercel.com/new) after connecting this repository.
 
 ## Features
 
@@ -11,16 +11,6 @@ A fan-made web app to **search Palworld resources** and find out **how** and **w
 - **Progression tiers** — Early, Mid, Late, and Endgame resources
 - **Detailed resource pages** — acquisition methods, map locations, related Pals, crafting recipes, and tips
 - **60+ curated resources** covering the full progression from Wood to Hexolite
-
-## Standalone Repository
-
-This app lives in the `palworld-companion/` folder. To use it as its own GitHub repository:
-
-```bash
-cd palworld-companion
-git init
-gh repo create palworld-companion --public --source=. --push
-```
 
 ## Quick Start
 
@@ -38,7 +28,38 @@ npm run build
 npm run preview
 ```
 
-The static site in `dist/` can be deployed to GitHub Pages, Vercel, Netlify, or any static host.
+## Deploy to Vercel
+
+### Option A — Vercel Dashboard (recommended)
+
+1. Push this repo to GitHub
+2. Go to [vercel.com/new](https://vercel.com/new)
+3. Import the `palworld-companion` repository
+4. Vercel auto-detects Vite — click **Deploy**
+
+### Option B — Vercel CLI
+
+```bash
+npm install -g vercel
+vercel --prod
+```
+
+### Option C — GitHub Actions
+
+Add these secrets to the repository:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+Push to `main` and the included workflow deploys automatically.
+
+## Publish to GitHub
+
+```bash
+chmod +x scripts/publish.sh
+./scripts/publish.sh
+```
 
 ## Tech Stack
 
