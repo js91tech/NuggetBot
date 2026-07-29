@@ -19,7 +19,7 @@ COIN_DROP_INTERVAL_MAX_MINUTES = 60
 COIN_DROP_MIN_TYPERS = 3
 COIN_DROP_MIN_AMOUNT = 25_000
 COIN_DROP_MAX_AMOUNT = 55_000
-COIN_DROP_CLAIM_SECONDS = 120
+COIN_DROP_CLAIM_SECONDS = 8 * 60
 
 
 class CoinDropView(discord.ui.View):
@@ -44,7 +44,7 @@ class CoinDropView(discord.ui.View):
             await self.message.edit(
                 content=(
                     f"**Coin drop expired.** Nobody claimed **{fmt_amount(self.amount)}** in "
-                    f"{COIN_DROP_CLAIM_SECONDS} seconds — returned to the house."
+                    f"{COIN_DROP_CLAIM_SECONDS // 60} minutes — returned to the house."
                 ),
                 view=self,
             )
@@ -157,7 +157,8 @@ class Economy(commands.Cog):
                     continue
                 body = (
                     f"**Random coin drop!** **{fmt_amount(amount)}** from the house are up for grabs—"
-                    f"**first to claim** wins. Anyone can press **Claim** for **{COIN_DROP_CLAIM_SECONDS}** seconds!"
+                    f"**first to claim** wins. Anyone can press **Claim** for "
+                    f"**{COIN_DROP_CLAIM_SECONDS // 60} minutes**!"
                 )
                 view = CoinDropView(self.bot, guild.id, amount)
                 try:
