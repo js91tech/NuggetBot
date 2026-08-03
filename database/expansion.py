@@ -178,6 +178,26 @@ class DatabaseExpansionMixin:
                 expires_at REAL NOT NULL DEFAULT 0
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS boss_hunt_progress (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                week_id TEXT NOT NULL,
+                hunt_key TEXT NOT NULL,
+                kills INTEGER NOT NULL DEFAULT 0,
+                claimed INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id, week_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS crew_weekly_boss_damage (
+                guild_id BIGINT NOT NULL,
+                crew_name TEXT NOT NULL,
+                week_id TEXT NOT NULL,
+                damage REAL NOT NULL DEFAULT 0 CHECK (damage >= 0),
+                PRIMARY KEY (guild_id, crew_name, week_id)
+            )
+            """,
         ]
         for sql in tables:
             await self.conn.execute(sql)
@@ -966,3 +986,101 @@ class DatabaseExpansionMixin:
             )
             await self.conn.commit()
         return None
+
+
+    # --- Boss hunt / crew raid scoreboard ---
+    async def record_boss_hunt_kill(
+        self,
+        user_id: int,
+        guild_id: int,
+        *,
+        week_id: str,
+        hunt_key: str,
+        variant: str,
+        target_variant: str,
+    ) -> int:
+        """Increment hunt kills when the defeated variant matches. Returns new kill count."""
+        if variant != target_variant:
+            row = await self.get_boss_hunt_progress(user_id, guild_id, week_id)
+            return int(row["kills"]) if row is not None else 0
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                INSERT INTO boss_hunt_progress (
+                    guild_id, user_id, week_id, hunt_key, kills, claimed
+                )
+                VALUES (?, ?, ?, ?, 1, 0)
+                ON CONFLICT(guild_id, user_id, week_id) DO UPDATE SET
+                    kills = boss_hunt_progress.kills + 1,
+                    hunt_key = excluded.hunt_key
+                """,
+                (guild_id, user_id, week_id, hunt_key),
+            )
+            await self.conn.commit()
+        row = await self.get_boss_hunt_progress(user_id, guild_id, week_id)
+        return int(row["kills"]) if row is not None else 1
+
+    async def get_boss_hunt_progress(
+        self, user_id: int, guild_id: int, week_id: str,
+    ) -> aiosqlite.Row | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM boss_hunt_progress
+            WHERE guild_id = ? AND user_id = ? AND week_id = ?
+            """,
+            (guild_id, user_id, week_id),
+        )
+        return await cursor.fetchone()
+
+    async def claim_boss_hunt_reward(
+        self, user_id: int, guild_id: int, week_id: str,
+    ) -> bool:
+        """Mark hunt claimed. Returns False if already claimed or missing."""
+        async with self._write_lock:
+            cursor = await self.conn.execute(
+                """
+                UPDATE boss_hunt_progress
+                SET claimed = 1
+                WHERE guild_id = ? AND user_id = ? AND week_id = ?
+                  AND claimed = 0
+                """,
+                (guild_id, user_id, week_id),
+            )
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
+    async def add_crew_weekly_boss_damage(
+        self,
+        guild_id: int,
+        crew_name: str,
+        week_id: str,
+        damage: float,
+    ) -> None:
+        if damage <= 0 or not crew_name:
+            return
+        async with self._write_lock:
+            await self.conn.execute(
+                """
+                INSERT INTO crew_weekly_boss_damage (guild_id, crew_name, week_id, damage)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(guild_id, crew_name, week_id) DO UPDATE SET
+                    damage = crew_weekly_boss_damage.damage + excluded.damage
+                """,
+                (guild_id, crew_name, week_id, float(damage)),
+            )
+            await self.conn.commit()
+
+    async def crew_weekly_boss_leaderboard(
+        self, guild_id: int, week_id: str, *, limit: int = 10,
+    ) -> list[aiosqlite.Row]:
+        cursor = await self.conn.execute(
+            """
+            SELECT crew_name, damage
+            FROM crew_weekly_boss_damage
+            WHERE guild_id = ? AND week_id = ?
+            ORDER BY damage DESC
+            LIMIT ?
+            """,
+            (guild_id, week_id, limit),
+        )
+        return list(await cursor.fetchall())

@@ -119,6 +119,7 @@ def boss_variant_dashboard_label(variant: str) -> str:
         "freaky_nikki": config.BOSS_NAME_FREAKY_NIKKI,
         "tomass": config.BOSS_NAME_TOMASS,
         "zz_wrath": config.BOSS_NAME_ZZ_WRATH,
+        "world_leviathan": config.BOSS_NAME_WORLD_LEVIATHAN,
     }
     if variant in special:
         return special[variant]

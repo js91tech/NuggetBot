@@ -115,14 +115,39 @@ RELIC_DEFINITIONS: dict[str, RelicDefinition] = {
         "balanced",
         "🏅",
     ),
+    "relic_wrath_sigil": RelicDefinition(
+        "relic_wrath_sigil",
+        "Sigil of ZZ's Wrath",
+        "Ultra-raid pressure — sharper boss damage.",
+        "boss_slayer",
+        "☠️",
+    ),
+    "relic_leviathan_scale": RelicDefinition(
+        "relic_leviathan_scale",
+        "Leviathan Scale",
+        "World-event scale — tougher raids and steadier income.",
+        "balanced",
+        "🐉",
+    ),
+    "relic_street_token": RelicDefinition(
+        "relic_street_token",
+        "Street Raid Token",
+        "Starter raid charm — a touch more scrap from bosses.",
+        "scrap_boost",
+        "🎫",
+    ),
 }
 
 BOSS_RELIC_DROPS: dict[str, tuple[str, ...]] = {
+    "normal": ("relic_street_token",),
+    "enraged": ("relic_street_token", "relic_scrap_gnome"),
     "mythic": ("relic_hannah_fang", "relic_henchman_totem"),
     "celestial": ("relic_medic_patch", "relic_duelists_coin"),
     "shadow": ("relic_scrap_gnome",),
     "tomass": ("relic_tomass_core",),
     "freaky_nikki": ("relic_jester_bell",),
+    "zz_wrath": ("relic_wrath_sigil", "relic_hannah_fang"),
+    "world_leviathan": ("relic_leviathan_scale", "relic_wrath_sigil", "relic_void_heart"),
 }
 
 VAULT_RELIC_DROPS: tuple[str, ...] = ("relic_void_heart", "relic_vault_key")

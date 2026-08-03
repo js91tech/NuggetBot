@@ -37,8 +37,28 @@ from utils.boss_adds import (
     add_expires_at,
     add_max_hp,
     pick_add_type,
+    roll_add_companion,
     roll_add_loot,
     should_spawn_add,
+)
+from utils.boss_refresh import (
+    RAID_ROLES,
+    boss_hunt_for_week,
+    current_boss_hunt_week_id,
+    format_role_help,
+    mood_counter_mult,
+    mood_for_hp_ratio,
+    mood_outgoing_damage_mult,
+    pick_counter_target,
+    role_counter_taken_mult,
+    role_damage_mult,
+)
+from utils.boss_rewards import (
+    grant_named_bonus,
+    grant_participation_rewards,
+    grant_top_damager_loot,
+    grant_world_leviathan_stash,
+    update_hunt_and_crew_scores,
 )
 from utils.boss_art import attach_boss_art, attach_boss_moment_art, moment_for_move
 from utils.boss_element_effects import element_hazard_text, roll_element_proc
@@ -85,6 +105,7 @@ BOSS_NAME = "Hannah"
 BOSS_NAME_TOMASS = config.BOSS_NAME_TOMASS
 BOSS_NAME_ZZ = config.BOSS_NAME_ZZ_WRATH
 BOSS_NAME_FREAKY_NIKKI = config.BOSS_NAME_FREAKY_NIKKI
+BOSS_NAME_LEVIATHAN = config.BOSS_NAME_WORLD_LEVIATHAN
 COUNTER_HP_BONUS = 0.30
 COUNTER_MULTI_SECOND = 0.65
 COUNTER_MULTI_THIRD = 0.55
@@ -102,12 +123,35 @@ class Boss(commands.Cog):
         self.bot = bot
         self._boss_finish_lock = asyncio.Lock()
         self._auto_spawn_due_at: dict[int, float] = {}
+        self._spawn_warned: set[int] = set()
+        # (guild_id, user_id) -> role id
+        self.raid_roles: dict[tuple[int, int], str] = {}
+        # guild_id -> mood id
+        self.raid_moods: dict[int, str] = {}
+        # guild_id -> first attacker user_id
+        self.first_blood: dict[int, int] = {}
         self.auto_spawn.start()
         self.passive_boss_decay_tick.start()
 
     def cog_unload(self) -> None:
         self.auto_spawn.cancel()
         self.passive_boss_decay_tick.cancel()
+
+    def set_raid_role(self, guild_id: int, user_id: int, role: str) -> str | None:
+        if role not in RAID_ROLES:
+            return None
+        self.raid_roles[(guild_id, user_id)] = role
+        return str(RAID_ROLES[role]["label"])
+
+    def get_raid_role(self, guild_id: int, user_id: int) -> str | None:
+        return self.raid_roles.get((guild_id, user_id))
+
+    def _clear_raid_state(self, guild_id: int) -> None:
+        self.raid_moods.pop(guild_id, None)
+        self.first_blood.pop(guild_id, None)
+        stale = [key for key in self.raid_roles if key[0] == guild_id]
+        for key in stale:
+            self.raid_roles.pop(key, None)
 
     async def _boss_hp(self, guild_id: int, variant: str) -> float:
         circulation = await self.bot.db.total_circulation(guild_id)
@@ -146,6 +190,8 @@ class Boss(commands.Cog):
             name = BOSS_NAME_ZZ
         elif variant == "freaky_nikki":
             name = BOSS_NAME_FREAKY_NIKKI
+        elif variant == "world_leviathan":
+            name = BOSS_NAME_LEVIATHAN
         if variant == "tomass":
             mirror = mirrored_variant or "enraged"
             hp = await self._tomass_hp(guild_id, mirror)
@@ -232,12 +278,14 @@ class Boss(commands.Cog):
         rows: list[Any],
         variant: str,
     ) -> list[tuple[int, ShopItem]]:
-        if variant not in ("celestial", "mythic", "zz_wrath") or not rows:
+        if variant not in ("celestial", "mythic", "zz_wrath", "world_leviathan") or not rows:
             return []
         drop_mult = await self.bot.db.get_drop_multiplier(guild_id)
         mythic_chance = await self.bot.db.get_config_value(guild_id, "boss_mythic_drop_chance")
         if variant == "zz_wrath":
             mythic_chance = min(1.0, mythic_chance * 2.5)
+        elif variant == "world_leviathan":
+            mythic_chance = min(1.0, mythic_chance * 2.0)
         elif variant == "mythic":
             mythic_chance = min(1.0, mythic_chance * 1.5)
         if random.random() >= mythic_chance * drop_mult:
@@ -329,7 +377,7 @@ class Boss(commands.Cog):
             if uid is not None:
                 await self.bot.db.grant_item(uid, guild_id, "void_hardener")
                 granted.append((uid, "Void Hardener"))
-        if variant in ("mythic", "zz_wrath"):
+        if variant in ("mythic", "zz_wrath", "world_leviathan"):
             if random.random() < config.BOSS_CELESTIAL_SHARD_DROP_CHANCE * drop_mult:
                 uid = Boss._weighted_random_damage_user(rows)
                 if uid is not None:
@@ -468,6 +516,7 @@ class Boss(commands.Cog):
         variant = str(boss["variant"])
         name = self._boss_display_name(variant, str(boss["name"]))
         await self.bot.db.clear_boss(guild_id)
+        self._clear_raid_state(guild_id)
         channel = await resolve_bot_announcement_channel(guild, self.bot.db)
         if channel is None:
             return
@@ -585,6 +634,8 @@ class Boss(commands.Cog):
             return BOSS_NAME_ZZ
         if variant == "freaky_nikki":
             return BOSS_NAME_FREAKY_NIKKI
+        if variant == "world_leviathan":
+            return BOSS_NAME_LEVIATHAN
         if fallback:
             return fallback
         return BOSS_NAME
@@ -639,6 +690,7 @@ class Boss(commands.Cog):
 
         if total_damage <= 0:
             await self.bot.db.clear_boss(guild_id)
+            self._clear_raid_state(guild_id)
             summary = (
                 f"{BOSS_NAME} collapsed from exhaustion with **no recorded strikes**. "
                 "No nuggets or gear were awarded."
@@ -690,12 +742,50 @@ class Boss(commands.Cog):
         loot_rows.extend(await self._roll_mythic_loot(guild_id, rows, variant))
         loot_rows.extend(await self._roll_accessory_loot(guild_id, rows))
         material_rows = await self._roll_enhancement_material_loot(guild_id, rows, variant)
-        if variant == "zz_wrath":
+        if variant in ("zz_wrath", "world_leviathan"):
             loot_rows.extend(await self._roll_ultra_loot(guild_id, rows))
         aspect_rows = await self._roll_aspect_loot(guild_id, rows, variant)
         contributor_ids = [int(row["user_id"]) for row in rows]
         exp_lines = await roll_boss_expansion_loot(
             self.bot.db, guild_id, contributor_ids, variant=variant,
+        )
+        display = lambda uid: self._display_name(guild, uid)
+        bonus_lines: list[str] = []
+        bonus_lines.extend(
+            await grant_participation_rewards(
+                self.bot.db, guild_id, rows, display_name=display,
+            )
+        )
+        first_uid = self.first_blood.get(guild_id)
+        if first_uid is not None and first_uid in contributor_ids:
+            bonus_lines.append(
+                await grant_named_bonus(
+                    self.bot.db,
+                    guild_id,
+                    first_uid,
+                    config.BOSS_FIRST_BLOOD_BONUS,
+                    label="first blood",
+                    display_name=display,
+                )
+            )
+        if killer_user_id is not None and killer_user_id in contributor_ids:
+            bonus_lines.append(
+                await grant_named_bonus(
+                    self.bot.db,
+                    guild_id,
+                    killer_user_id,
+                    config.BOSS_LAST_HIT_BONUS,
+                    label="killing blow",
+                    display_name=display,
+                )
+            )
+        top_line = await grant_top_damager_loot(
+            self.bot.db, guild_id, rows, variant, display_name=display,
+        )
+        if top_line:
+            bonus_lines.append(top_line)
+        hunt_lines, crew_lines = await update_hunt_and_crew_scores(
+            self.bot.db, guild_id, rows, variant,
         )
         gear_lines = [
             f"**{self._display_name(guild, uid)}** · **{item.name}** (`{item.id}`)"
@@ -710,8 +800,12 @@ class Boss(commands.Cog):
             for uid, label in aspect_rows
         )
         gear_lines.extend(exp_lines)
+        gear_lines.extend(bonus_lines)
+        gear_lines.extend(hunt_lines)
+        gear_lines.extend(crew_lines)
 
         await self.bot.db.clear_boss(guild_id)
+        self._clear_raid_state(guild_id)
 
         stash_lines: list[str] = []
         if variant == "freaky_nikki":
@@ -720,12 +814,19 @@ class Boss(commands.Cog):
                 guild_id,
                 contributor_ids,
             )
+        elif variant == "world_leviathan":
+            stash_lines = await grant_world_leviathan_stash(
+                self.bot.db,
+                guild_id,
+                contributor_ids,
+                display_name=display,
+            )
 
         await self.bot.db.increment_boss_kills_for_raid(
             guild_id,
             contributor_ids,
             mythic=variant == "mythic",
-            ultra=variant == "zz_wrath",
+            ultra=variant in ("zz_wrath", "world_leviathan"),
         )
 
         if killer_user_id is not None:
@@ -932,13 +1033,35 @@ class Boss(commands.Cog):
             guild_id = guild.id
             if guild_id not in self._auto_spawn_due_at:
                 self._schedule_next_auto_spawn(guild_id, now=now)
-            if now < self._auto_spawn_due_at[guild_id]:
+            due = self._auto_spawn_due_at[guild_id]
+            remaining = due - now
+            if 0 < remaining <= config.BOSS_SPAWN_WARN_SECONDS and guild_id not in self._spawn_warned:
+                self._spawn_warned.add(guild_id)
+                try:
+                    await self._send_spawn_warning(guild, remaining)
+                except Exception:
+                    logging.exception("Boss spawn warning failed for guild %s", guild_id)
+            if now < due:
                 continue
+            self._spawn_warned.discard(guild_id)
             self._schedule_next_auto_spawn(guild_id, now=now)
             try:
                 await self._try_auto_spawn_guild(guild)
             except Exception:
                 logging.exception("Auto boss spawn failed for guild %s", guild_id)
+
+    async def _send_spawn_warning(self, guild: discord.Guild, remaining: float) -> None:
+        channel = await resolve_bot_announcement_channel(guild, self.bot.db)
+        if channel is None:
+            return
+        mins = max(1, int(round(remaining / 60)))
+        gate = getattr(self.bot, "outbound_gate", None)
+        await safe_channel_send(
+            channel,
+            f"⏳ **Raid inbound** — a boss spawns in about **{mins} minute(s)**. Gear up!",
+            allowed_mentions=discord.AllowedMentions.none(),
+            gate=gate,
+        )
 
     async def _try_auto_spawn_guild(self, guild: discord.Guild) -> None:
         boss = await self.bot.db.get_active_boss(guild.id)
@@ -948,22 +1071,27 @@ class Boss(commands.Cog):
             else:
                 return
 
+        event = await self.bot.db.get_active_guild_event(guild.id)
+        world_week = (
+            event is not None and str(event["event_type"]) == "world_boss_week"
+        )
         roll = random.random()
-        ultra = config.BOSS_ULTRA_SPAWN_CHANCE
-        nikki = config.BOSS_AUTO_SPAWN_FREAKY_NIKKI_CHANCE
-        tomass = config.BOSS_AUTO_SPAWN_TOMASS_CHANCE
-        if roll < ultra:
-            variant = "zz_wrath"
-            mirrored_variant = None
-        elif roll < ultra + nikki:
-            variant = "freaky_nikki"
-            mirrored_variant = None
-        elif roll < ultra + nikki + tomass:
-            variant = "tomass"
-            mirrored_variant = random.choice(config.HANNAH_SPAWN_VARIANTS)
+        mirrored_variant = None
+        if world_week and roll < config.BOSS_WORLD_EVENT_SPAWN_CHANCE:
+            variant = "world_leviathan"
         else:
-            variant = random.choice(config.HANNAH_SPAWN_VARIANTS)
-            mirrored_variant = None
+            ultra = config.BOSS_ULTRA_SPAWN_CHANCE
+            nikki = config.BOSS_AUTO_SPAWN_FREAKY_NIKKI_CHANCE
+            tomass = config.BOSS_AUTO_SPAWN_TOMASS_CHANCE
+            if roll < ultra:
+                variant = "zz_wrath"
+            elif roll < ultra + nikki:
+                variant = "freaky_nikki"
+            elif roll < ultra + nikki + tomass:
+                variant = "tomass"
+                mirrored_variant = random.choice(config.HANNAH_SPAWN_VARIANTS)
+            else:
+                variant = random.choice(config.HANNAH_SPAWN_VARIANTS)
 
         if variant == "tomass":
             hp = await self._spawn_boss(
@@ -1123,6 +1251,17 @@ class Boss(commands.Cog):
         embed.add_field(name="HP", value=f"{fmt_amount(hp)} / {fmt_amount(max_hp)}", inline=True)
         threat = config.BOSS_VARIANTS[variant]["threat"]
         embed.add_field(name="Threat", value=str(threat), inline=True)
+        mood = self.raid_moods.get(guild_id)
+        if mood:
+            embed.add_field(name="Mood", value=mood.title(), inline=True)
+        if member is not None:
+            role = self.get_raid_role(guild_id, member.id)
+            if role:
+                embed.add_field(
+                    name="Your role",
+                    value=str(RAID_ROLES[role]["label"]),
+                    inline=True,
+                )
         element = boss_row["element"]
         if element:
             embed.add_field(name="Element", value=str(element).title(), inline=True)
@@ -1396,6 +1535,18 @@ class Boss(commands.Cog):
                 damage = max(1, int(damage * config.BOSS_RAID_FATIGUE_DAMAGE_MULT))
                 fatigue_note = " · **Raid fatigue**"
 
+        role = self.get_raid_role(guild_id, member.id)
+        mood = self.raid_moods.get(guild_id)
+        if mood is None:
+            mood, _ = mood_for_hp_ratio(hp_ratio_now)
+            self.raid_moods[guild_id] = mood
+        damage = max(1, int(damage * role_damage_mult(role) * mood_outgoing_damage_mult(mood, role)))
+        role_note = ""
+        if role is not None:
+            role_note = f" · {RAID_ROLES[role]['label']}"
+        if guild_id not in self.first_blood:
+            self.first_blood[guild_id] = member.id
+
         await self.bot.db.record_boss_attack_time(guild_id, member.id)
         mana_gain = await self.bot.db.restore_mana_from_damage(member.id, guild_id, damage)
         heal_applied = 0.0
@@ -1439,9 +1590,14 @@ class Boss(commands.Cog):
         boss_max = float(updated["max_hp"])
         phase_pct = await self.bot.db.try_mark_boss_phase(guild_id, boss_hp / boss_max)
         phase_note = ""
+        hp_ratio_after = boss_hp / boss_max if boss_max > 0 else 1.0
+        new_mood, mood_blurb = mood_for_hp_ratio(hp_ratio_after)
+        prev_mood = self.raid_moods.get(guild_id)
+        self.raid_moods[guild_id] = new_mood
         if phase_pct is not None:
             phase_note = f"\n**Phase {phase_pct}%** — {BOSS_NAME} enrages!"
-        hp_ratio_after = boss_hp / boss_max if boss_max > 0 else 1.0
+        if prev_mood != new_mood:
+            phase_note = f"{phase_note}\n**Mood: {new_mood.title()}** — {mood_blurb}".strip()
         add_note = await self._maybe_spawn_raid_add(
             guild,
             variant=variant,
@@ -1465,7 +1621,16 @@ class Boss(commands.Cog):
         weapon_text = loadout.primary.name if loadout.primary is not None else "bare hands"
         if loadout.off_hand is not None:
             weapon_text = f"{weapon_text} + {loadout.off_hand.name} (off-hand)"
-        hit_value = f"{attack_verb} for **{damage}** with {weapon_text}{spell_note}{aspect_note}{fatigue_note}{risk_note}"
+        hit_value = (
+            f"{attack_verb} for **{damage}** with {weapon_text}"
+            f"{spell_note}{aspect_note}{fatigue_note}{risk_note}{role_note}"
+        )
+        healer_note = ""
+        if role == "healer" and random.random() < config.BOSS_HEALER_PULSE_CHANCE:
+            heal_amt = max(1, int(player_max_hp * config.BOSS_HEALER_PULSE_PCT))
+            await self.bot.db.heal_player(member.id, guild_id, heal_amt, player_max_hp)
+            healer_note = f"\n💚 Healer pulse restored **{heal_amt}** HP."
+            hit_value += healer_note
         if dot_note:
             hit_value = f"{dot_note}\n{hit_value}"
         embed.add_field(
@@ -1606,6 +1771,9 @@ class Boss(commands.Cog):
                 for _ in range(qty):
                     await self.bot.db.grant_item(member.id, guild_id, item_id)
                 drop_parts.append(f"**{qty}×** {label}")
+            companion_id = roll_add_companion(add_type)
+            if companion_id and await self.bot.db.grant_companion(member.id, guild_id, companion_id):
+                drop_parts.append(f"companion `{companion_id}`")
             if drop_parts:
                 loot_note = f"\nLoot: {', '.join(drop_parts)}"
 
@@ -1788,7 +1956,14 @@ class Boss(commands.Cog):
 
         attacker_ids = list({int(row["user_id"]) for row in damage_rows})
         target_count = self._counter_target_count(len(attacker_ids), hp, max_hp)
-        victims = random.sample(attacker_ids, target_count)
+        victims: list[int] = []
+        pool = list(attacker_ids)
+        for _ in range(min(target_count, len(pool))):
+            pick = pick_counter_target(
+                pool, lambda uid: self.get_raid_role(guild_id, uid),
+            )
+            victims.append(pick)
+            pool.remove(pick)
         parts: list[str] = []
         any_downed = False
         last_move: str | None = None
@@ -1859,6 +2034,9 @@ class Boss(commands.Cog):
         )
         if summoner_victim:
             damage = apply_summoner_counter_damage(damage)
+        role = self.get_raid_role(guild_id, victim_id)
+        mood = self.raid_moods.get(guild_id)
+        damage = max(1, int(damage * role_counter_taken_mult(role) * mood_counter_mult(mood)))
         hp, max_hp = await self.bot.db.damage_player(victim_id, guild_id, damage, max_hp)
         hp, potion_note = await self.bot.db.try_auto_potion_heal(
             victim_id, guild_id, current_hp=hp, max_hp=max_hp,
@@ -1887,6 +2065,81 @@ class Boss(commands.Cog):
             False,
             move,
         )
+
+    @app_commands.command(name="boss-hunt", description="Weekly boss hunt progress and claim rewards.")
+    @app_commands.guild_only()
+    async def boss_hunt(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None or interaction.user is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        week_id = current_boss_hunt_week_id()
+        hunt = boss_hunt_for_week(week_id)
+        progress = await self.bot.db.get_boss_hunt_progress(
+            interaction.user.id, interaction.guild_id, week_id,
+        )
+        kills = int(progress["kills"]) if progress is not None else 0
+        claimed = bool(progress["claimed"]) if progress is not None else False
+        done = kills >= hunt.kills_required
+        status = "Claimed" if claimed else ("Ready to claim!" if done else "In progress")
+        embed = discord.Embed(
+            title=f"Weekly hunt — {hunt.label}",
+            description=(
+                f"Defeat **{hunt.variant.replace('_', ' ')}** "
+                f"**{hunt.kills_required}×** this week.\n"
+                f"Progress: **{kills}/{hunt.kills_required}** · {status}"
+            ),
+            color=discord.Color.purple(),
+        )
+        reward_bits = [fmt_amount(hunt.reward_nuggets)]
+        if hunt.reward_item:
+            reward_bits.append(f"{hunt.reward_item_qty}× `{hunt.reward_item}`")
+        embed.add_field(name="Reward", value=" + ".join(reward_bits), inline=False)
+        if done and not claimed:
+            ok = await self.bot.db.claim_boss_hunt_reward(
+                interaction.user.id, interaction.guild_id, week_id,
+            )
+            if ok:
+                await self.bot.db.credit_wallet(
+                    interaction.user.id,
+                    interaction.guild_id,
+                    hunt.reward_nuggets,
+                    apply_bonuses=False,
+                )
+                if hunt.reward_item:
+                    for _ in range(hunt.reward_item_qty):
+                        await self.bot.db.grant_item(
+                            interaction.user.id, interaction.guild_id, hunt.reward_item,
+                        )
+                embed.set_footer(text="Hunt reward claimed!")
+            else:
+                embed.set_footer(text="Could not claim — already claimed?")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="boss-crew-lb", description="Weekly crew boss damage scoreboard.")
+    @app_commands.guild_only()
+    async def boss_crew_lb(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        week_id = current_boss_hunt_week_id()
+        rows = await self.bot.db.crew_weekly_boss_leaderboard(
+            interaction.guild_id, week_id, limit=10,
+        )
+        if not rows:
+            await interaction.response.send_message(
+                "No crew boss damage recorded this week yet.", ephemeral=True,
+            )
+            return
+        lines = [
+            f"**{i}.** {row['crew_name']} — **{fmt_amount(float(row['damage']))}**"
+            for i, row in enumerate(rows, start=1)
+        ]
+        embed = discord.Embed(
+            title=f"Crew raid scoreboard · {week_id}",
+            description="\n".join(lines),
+            color=discord.Color.dark_gold(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="raid-leaderboard", description="Top damage dealers on the active boss.")
     @app_commands.guild_only()

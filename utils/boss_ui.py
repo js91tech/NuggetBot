@@ -265,6 +265,34 @@ class BossFightView(discord.ui.View):
         embed.set_footer(text="Rewards scale with damage share when the boss falls")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @discord.ui.button(label="🛡️ Tank", style=discord.ButtonStyle.secondary, row=2)
+    async def role_tank_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await self._pick_role(interaction, "tank")
+
+    @discord.ui.button(label="💚 Healer", style=discord.ButtonStyle.secondary, row=2)
+    async def role_healer_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await self._pick_role(interaction, "healer")
+
+    @discord.ui.button(label="🗡️ Glass", style=discord.ButtonStyle.secondary, row=2)
+    async def role_glass_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        del button
+        await self._pick_role(interaction, "glass")
+
+    async def _pick_role(self, interaction: discord.Interaction, role: str) -> None:
+        from utils.boss_refresh import RAID_ROLES, format_role_help
+
+        label = self.cog.set_raid_role(self.guild_id, self.user_id, role)
+        if label is None:
+            await interaction.response.send_message("Unknown role.", ephemeral=True)
+            return
+        blurb = RAID_ROLES[role]["blurb"]
+        await interaction.response.send_message(
+            f"Raid role set to {label}.\n{blurb}\n\n{format_role_help()}",
+            ephemeral=True,
+        )
+
     @discord.ui.button(label="🧪 Auto-heal", style=discord.ButtonStyle.success, row=1)
     async def auto_heal_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         del button

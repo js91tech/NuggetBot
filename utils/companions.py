@@ -94,8 +94,8 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
 }
 
 ADD_COMPANION_DROPS: dict[str, str] = {
-    "henchmen": "hench_scrap_gnome",
-    "jesters": "hench_jester_imp",
+    "henchman": "hench_scrap_gnome",
+    "court_jester": "hench_jester_imp",
 }
 
 VAULT_COMPANION_DROP = "hench_vault_rat"

@@ -192,13 +192,14 @@ BOSS_AUTO_SPAWN_POLL_SECONDS = 60
 BOSS_PASSIVE_HP_DECAY_FRACTION_PER_MINUTE = 0.01
 # How often to run the passive decay job (decay math still uses whole minutes).
 BOSS_PASSIVE_DECAY_TICK_SECONDS = 120
-BOSS_INFERIOR_DROP_CHANCE = 0.38
-BOSS_EPIC_DROP_CHANCE = 0.03
-BOSS_MYTHIC_DROP_CHANCE = 0.015
-BOSS_ASPECT_DROP_CHANCE = 0.12
-BOSS_ACCESSORY_DROP_CHANCE = 0.06
-BOSS_HARDENER_DROP_CHANCE = 0.08
-BOSS_CELESTIAL_SHARD_DROP_CHANCE = 0.04
+# Rebalanced: less battle-worn spam, more meaningful mid/high drops.
+BOSS_INFERIOR_DROP_CHANCE = 0.18
+BOSS_EPIC_DROP_CHANCE = 0.08
+BOSS_MYTHIC_DROP_CHANCE = 0.025
+BOSS_ASPECT_DROP_CHANCE = 0.15
+BOSS_ACCESSORY_DROP_CHANCE = 0.10
+BOSS_HARDENER_DROP_CHANCE = 0.12
+BOSS_CELESTIAL_SHARD_DROP_CHANCE = 0.06
 DUNGEON_ACCESSORY_DROP_CHANCE = 0.02
 DUNGEON_VAULT_ACCESSORY_DROP_CHANCE = 0.05
 BOSS_ADD_SPAWN_CHANCE = 0.06
@@ -230,12 +231,34 @@ BOSS_MIN_HP = 500.0
 BOSS_CIRCULATION_HP_FACTOR = 0.02
 BOSS_HP_CAP = 40_000.0
 BOSS_THREAT_HP_BONUS_PER_TIER = 0.10
-BOSS_MYTHIC_DESPAWN_SECONDS = 10 * 60
-BOSS_ULTRA_DESPAWN_SECONDS = 10 * 60
-BOSS_ULTRA_SPAWN_CHANCE = 0.15
-BOSS_AUTO_SPAWN_FREAKY_NIKKI_CHANCE = 0.20
+BOSS_MYTHIC_DESPAWN_SECONDS = 12 * 60
+BOSS_ULTRA_DESPAWN_SECONDS = 12 * 60
+BOSS_ULTRA_SPAWN_CHANCE = 0.12
+BOSS_AUTO_SPAWN_FREAKY_NIKKI_CHANCE = 0.15
 BOSS_ATTACK_COOLDOWN_MIN_SECONDS = 2
 BOSS_ATTACK_COOLDOWN_MAX_SECONDS = 3
+# Warn the guild this many seconds before an auto-spawn is due.
+BOSS_SPAWN_WARN_SECONDS = 10 * 60
+# Participation floor: anyone with at least this much damage gets a purse + scrap.
+BOSS_PARTICIPATION_MIN_DAMAGE = 50.0
+BOSS_PARTICIPATION_PURSE = 2_500.0
+BOSS_PARTICIPATION_SCRAP = (1, 3)
+BOSS_FIRST_BLOOD_BONUS = 5_000.0
+BOSS_LAST_HIT_BONUS = 7_500.0
+BOSS_TOP_DAMAGER_LOOT_POOL: tuple[str, ...] = (
+    "void_hardener",
+    "alchemy_scrap",
+    "raid_potion",
+    "energy_drink",
+)
+BOSS_HEALER_PULSE_CHANCE = 0.30
+BOSS_HEALER_PULSE_PCT = 0.08
+BOSS_MOOD_ARMORED_DAMAGE_MULT = 0.85
+BOSS_MOOD_AGGRESSIVE_COUNTER_MULT = 1.20
+BOSS_MOOD_FRANTIC_COUNTER_MULT = 1.10
+BOSS_CREW_MVP_BONUS = 10_000.0
+# During world_boss_week, this fraction of auto-spawns become the world leviathan.
+BOSS_WORLD_EVENT_SPAWN_CHANCE = 0.55
 # Legacy default when a row has no stored per-attack cooldown.
 BOSS_ATTACK_COOLDOWN_SECONDS = BOSS_ATTACK_COOLDOWN_MAX_SECONDS
 BOSS_RAIDER_DAMAGE_MULT: dict[int, float] = {1: 0.65, 2: 0.80, 3: 0.95}
@@ -251,12 +274,12 @@ BOSS_ENRAGE_HP_THRESHOLD = 0.25
 BOSS_ENRAGE_COUNTER_MULT = 1.35
 BOSS_COUNTER_THREAT_SCALE = 0.12
 BOSS_PASSIVE_DECAY_BY_THREAT: dict[int, float] = {
-    1: 0.010,
-    2: 0.009,
-    3: 0.008,
-    4: 0.006,
-    5: 0.004,
-    6: 0.003,
+    1: 0.008,
+    2: 0.007,
+    3: 0.006,
+    4: 0.005,
+    5: 0.0035,
+    6: 0.0025,
 }
 BOSS_REWARD_MULT_BY_THREAT: dict[int, float] = {
     1: 1.0,
@@ -333,10 +356,66 @@ BOSS_VARIANTS = {
         "counter_damage": (32, 58),
         "crit_chance": 0.14,
     },
+    "world_leviathan": {
+        "fixed_hp": 55_000.0,
+        "counter_chance": 0.26,
+        "threat": 6,
+        "counter_damage": (65, 110),
+        "crit_chance": 0.20,
+        "despawn_seconds": 15 * 60,
+    },
 }
 
 BOSS_NAME_TOMASS = "TomAss"
 BOSS_NAME_FREAKY_NIKKI = "Freaky Nikki"
+BOSS_NAME_WORLD_LEVIATHAN = "World Leviathan"
+BOSS_HUNT_ROTATION: tuple[dict, ...] = (
+    {
+        "hunt_key": "mythic_duo",
+        "label": "Mythic Duo",
+        "variant": "mythic",
+        "kills_required": 2,
+        "reward_nuggets": 50_000.0,
+        "reward_item": "void_hardener",
+        "reward_item_qty": 2,
+    },
+    {
+        "hunt_key": "wrath_once",
+        "label": "Wrath Protocol",
+        "variant": "zz_wrath",
+        "kills_required": 1,
+        "reward_nuggets": 75_000.0,
+        "reward_item": "celestial_shard",
+        "reward_item_qty": 1,
+    },
+    {
+        "hunt_key": "nikki_party",
+        "label": "Nikki Night",
+        "variant": "freaky_nikki",
+        "kills_required": 3,
+        "reward_nuggets": 40_000.0,
+        "reward_item": "raid_potion",
+        "reward_item_qty": 3,
+    },
+    {
+        "hunt_key": "shadow_sweep",
+        "label": "Shadow Sweep",
+        "variant": "shadow",
+        "kills_required": 4,
+        "reward_nuggets": 35_000.0,
+        "reward_item": "alchemy_scrap",
+        "reward_item_qty": 8,
+    },
+    {
+        "hunt_key": "leviathan_call",
+        "label": "Leviathan Call",
+        "variant": "world_leviathan",
+        "kills_required": 1,
+        "reward_nuggets": 100_000.0,
+        "reward_item": "celestial_shard",
+        "reward_item_qty": 2,
+    },
+)
 FREAKY_NIKKI_SCRAP_RANGE = (2, 8)
 FREAKY_NIKKI_CONSUMABLE_POOL: tuple[str, ...] = (
     "raid_potion",
@@ -353,6 +432,7 @@ BOSS_AUTO_SPAWN_TOMASS_CHANCE = 0.03
 HANNAH_SPAWN_VARIANTS: tuple[str, ...] = ("normal", "enraged", "shadow", "celestial", "mythic")
 # Dashboard summon dropdown — special bosses first, then Hannah tiers.
 BOSS_DASHBOARD_VARIANT_ORDER: tuple[str, ...] = (
+    "world_leviathan",
     "freaky_nikki",
     "zz_wrath",
     "tomass",

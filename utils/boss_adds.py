@@ -44,7 +44,9 @@ def add_max_hp(boss_max_hp: float, threat: int) -> float:
 
 
 def pick_add_type(variant: str) -> str:
-    high_tier = variant in ("shadow", "celestial", "mythic", "zz_wrath", "freaky_nikki")
+    high_tier = variant in (
+        "shadow", "celestial", "mythic", "zz_wrath", "freaky_nikki", "world_leviathan",
+    )
     if high_tier and random.random() < 0.55:
         return "court_jester"
     return "henchman"
@@ -68,13 +70,25 @@ def roll_add_loot(add_type: str, boss_variant: str) -> list[tuple[str, int]]:
     drops: list[tuple[str, int]] = []
     if add_type == "henchman":
         drops.append(("alchemy_scrap", random.randint(1, 4)))
-        if boss_variant in ("celestial", "mythic", "zz_wrath") and random.random() < 0.15:
+        if boss_variant in ("celestial", "mythic", "zz_wrath", "world_leviathan") and random.random() < 0.15:
             drops.append(("void_hardener", 1))
     elif add_type == "court_jester":
         drops.append(("void_hardener", random.randint(1, 2)))
         if random.random() < 0.25:
             drops.append(("alchemy_scrap", random.randint(1, 2)))
     return [(item_id, qty) for item_id, qty in drops if item_id not in FORBIDDEN_ADD_DROPS]
+
+
+def roll_add_companion(add_type: str) -> str | None:
+    """Return companion id when the add drops a henchling, else None."""
+    from utils.companions import ADD_COMPANION_DROPS
+
+    companion_id = ADD_COMPANION_DROPS.get(add_type)
+    if companion_id is None:
+        return None
+    if random.random() >= config.COMPANION_DROP_CHANCE:
+        return None
+    return companion_id
 
 
 def add_expires_at(now: float | None = None) -> float:

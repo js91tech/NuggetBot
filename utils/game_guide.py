@@ -240,9 +240,16 @@ def _build_sections() -> tuple[GuideSection, ...]:
                 "Boss raids",
                 [
                     "**Commands** — `/boss` panel · `/attack` · **Attack Add** · `/heal` · `/cast` · `/use` · "
-                    "`/boss-status` · `/raid-leaderboard`",
+                    "`/boss-status` · `/raid-leaderboard` · `/boss-hunt` · `/boss-crew-lb`",
                     "**How raids work**\n"
-                    "· Bosses auto-spawn about every **90** minutes when none is active\n"
+                    "· Bosses auto-spawn about every **90** minutes (10‑min warning ping)\n"
+                    "· Pick a raid role on `/boss`: **Tank**, **Healer**, or **Glass**\n"
+                    "· Boss **mood** shifts as HP drops (aggressive → armored → frantic)\n"
+                    "· Faster kill race: first blood, killing blow, and top-damager crate bonuses\n"
+                    "· Everyone who deals meaningful damage gets a participation purse + scrap\n"
+                    "· Raid adds can drop **companions**; every boss tier can drop **relics**\n"
+                    "· Weekly `/boss-hunt` targets + crew scoreboard via `/boss-crew-lb`\n"
+                    "· `world_boss_week` event spawns the **World Leviathan** with unique loot\n"
                     "· Your weapon sets base damage (+ small roll); armor adds HP and mitigation\n"
                     "· Hannah counters can down you — teammates `/heal` to revive\n"
                     "· Damage share when the boss falls; killing blow shows your avatar pose",
@@ -252,12 +259,11 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· Use **Attack Add** on the `/boss` panel — adds never drop celestial shards",
                     "**Variants** (weakest → strongest)\n"
                     "normal → enraged → shadow → celestial → mythic\n"
-                    "Special: **TomAss** (regen), **ZZ Wrath** (40k HP), **Freaky Nikki** (moment counters)",
+                    "Special: **TomAss**, **ZZ Wrath**, **Freaky Nikki**, **World Leviathan**",
                     "**Elements** — bosses have fire/frost/storm/void/verdant; your class element "
                     "can boost or reduce `/attack` damage.\n"
-                    "**Loot** — battle-worn gear (craft up with `/craft`), epic raid pieces, "
-                    "mythic drops on celestial/mythic, aspect drops, **accessories**, void hardener, "
-                    "celestial shards (mythic / ZZ Wrath defeat only)",
+                    "**Loot** — less battle-worn spam; more epic/aspect/accessory/hardener odds; "
+                    "top damager crate; celestial shards on mythic / ZZ / Leviathan",
                 ],
             ),
         ),
