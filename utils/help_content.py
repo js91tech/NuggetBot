@@ -10,8 +10,9 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Raid & boss",
-        "**/boss** — fight panel: Attack, **Attack Add**, Cast, Items, Heal, Auto-heal, Refresh, Raid LB\n"
+        "**/boss** — fight panel: Attack, Attack Add, roles (Tank/Healer/Glass), Cast, Items, Heal\n"
         "**/attack** · **/heal** · **/cast** · **/use** · **/boss-status** · **/raid-leaderboard**\n"
+        "**/boss-hunt** · **/boss-crew-lb**\n"
         "**/enhance** · **/repair-gear** · **/equip-instance** — BDO-style gear enhancement (+1→PENTA)\n"
         "Raid adds (**Hannah's Henchmen**, **Court of Kitty's Jesters**) drop scrap/hardener — never celestial shards.\n"
         "**/shop** · **/buy** · **/equip** · **/craft** · **/prestige**\n"
