@@ -33,7 +33,7 @@ QUEST_SHORTCUT_HINTS: dict[str, str] = {
     "chat_message": "Stay active in chat to earn passive nuggets.",
     "territory_claim": "Use `/territory` to claim zones.",
     "territory_guards": "Use `/territory guards` to hire mercs.",
-    "corp_project": "Open **Corp Projects** from `/crew`.",
+    "corp_project": "Open **Corp Projects** from `/crew panel`.",
     "dungeon_clear": "Use `/dungeon` to run a delve.",
 }
 

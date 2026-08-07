@@ -79,7 +79,7 @@ class Spells(commands.Cog):
         cls = get_class(class_id)
         if cls is None:
             await interaction.response.send_message(
-                "Choose a class with `/class-choose` first.",
+                "Choose a class with `/class choose` first.",
                 ephemeral=True,
             )
             return
@@ -132,7 +132,7 @@ class Spells(commands.Cog):
 
         class_id = await self.bot.db.get_class_id(interaction.user.id, interaction.guild_id)
         if not class_id:
-            await interaction.response.send_message("Choose a class with `/class-choose` first.", ephemeral=True)
+            await interaction.response.send_message("Choose a class with `/class choose` first.", ephemeral=True)
             return
 
         result = await cast_skill_for_user(

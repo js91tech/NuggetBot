@@ -177,7 +177,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "1. `/daily` — free nuggets\n"
                     "2. `/shop` — buy a weapon and armor\n"
                     "3. `/equip` — wear your gear\n"
-                    "4. `/class-choose` — pick Vanguard, Mogul, or Shade\n"
+                    "4. `/class choose` — pick Vanguard, Mogul, or Shade\n"
                     "5. `/boss` or `/attack` — join the raid\n"
                     "6. `/balance` — pocket vs bank vault",
                     "**Core loops**\n"
@@ -303,7 +303,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "`/arrest` failed thieves within 5 minutes.",
                     "**Bank heist** — `/bank-heist` tier panel vs target **bank**; hire `/bodyguards` "
                     "to defend. Tier 3 failures can make gear **unstable** — repair with `/fix`.",
-                    "**Crews** — `/crew` panel: treasury, deposits, loans, XP levels\n"
+                    "**Crews** — `/crew panel`: treasury, deposits, loans, XP levels\n"
                     "**Territories** — `/territory` map; five zones, hourly crew income, "
                     "30 min sieges, zone perks (heist loot, craft discount, etc.)",
                     "**Casino** — `/coinflip` · `/blackjack` · `/slots` · `/jackpot`",
@@ -318,13 +318,13 @@ def _build_sections() -> tuple[GuideSection, ...]:
             pages=_static_pages(
                 "Character build",
                 [
-                    "**Classes** — `/class-choose` then `/class-evolve` with class XP from duels and boss damage\n"
+                    "**Classes** — `/class choose` then `/class evolve` with class XP from duels and boss damage\n"
                     "Starters: **Vanguard** (combat), **Mogul** (income), **Shade** (heists)\n"
                     "Evolve → master branches → hybrids (**Warlord**, **Archon**) need multiple master roots",
                     "**Attributes** — `/attributes` STR/DEX/AGI/DEF/VIT from class XP; "
                     "caps scale with prestige\n"
                     "**Skills** — `/cast` in raids/duels; mana from damage dealt (healers regen over time)\n"
-                    "**Aspects** — `/aspects` Diablo-style rolls; equip slots; `/fuse-aspects` burn 3 for stronger roll",
+                    "**Aspects** — `/aspects` Diablo-style rolls; equip slots; `/aspects fuse` burn 3 for stronger roll",
                     "**Avatars** — `/avatar` victory poses on duel wins and boss killing blows\n"
                     "**Accessories** — **ring** + **amulet** slots; flat dmg/HP/crit/mit bonuses\n"
                     "`/profile` · `/stats` · `/inventory` · `/loadout` · `/equip-best` · `/equip-instance`",
@@ -488,7 +488,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "security; they get 15 min to **/business defend**)\n"
                     "· 🗺️ Market Expansion — instant district influence\n"
                     "_No attack ever permanently destroys a business._",
-                    "**Corporations** (`/crew`) — crews double as corporations:\n"
+                    "**Corporations** (`/crew panel`) — crews double as corporations:\n"
                     + "\n".join(corp_upgrade_lines)
                     + "\n**Projects:** " + ", ".join(p.split(' — ')[0] for p in corp_project_lines)
                     + "\n**Corporate War** — weekly; top corp by vault + territory wins a treasury bonus.",

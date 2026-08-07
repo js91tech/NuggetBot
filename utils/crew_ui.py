@@ -376,7 +376,7 @@ class CrewJoinView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "Open your own crew panel with `/crew`.", ephemeral=True,
+                "Open your own crew panel with `/crew panel`.", ephemeral=True,
             )
             return False
         return True
@@ -415,7 +415,7 @@ class CrewPanelView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "Open your own crew panel with `/crew`.", ephemeral=True,
+                "Open your own crew panel with `/crew panel`.", ephemeral=True,
             )
             return False
         return True

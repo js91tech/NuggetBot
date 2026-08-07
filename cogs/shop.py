@@ -244,7 +244,7 @@ class Shop(commands.Cog):
             for field_name, field_value in field_chunks:
                 embed.add_field(name=field_name, value=field_value, inline=False)
         embed.set_footer(
-            text="Use /buy [item] [quantity] then /equip. Trap bombs: /buy trap_bomb. Aspects: /buy-aspect."
+            text="Use /buy [item] [quantity] then /equip. Trap bombs: /buy trap_bomb. Aspects: /aspects buy."
         )
         await interaction.response.send_message(embed=embed)
 

@@ -229,7 +229,7 @@ async def build_war_standings_embed(
         color=discord.Color.dark_gold(),
     )
     if not standings:
-        embed.add_field(name="No corporations yet", value="Found a crew with `/crew`.", inline=False)
+        embed.add_field(name="No corporations yet", value="Found a crew with `/crew panel`.", inline=False)
         return embed
     lines = [
         f"**{i}. {name}** — {fmt_amount(score)}"

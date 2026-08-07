@@ -124,7 +124,7 @@ def build() -> None:
             [
                 "/daily — 24h claim",
                 "/jobs · /work — 4.5× payouts",
-                "/class-choose · /class-evolve",
+                "/class choose · /class evolve",
                 "/quests — onboarding & daily goals",
             ],
         ),

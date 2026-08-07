@@ -226,7 +226,7 @@ class TerritoryMapView(discord.ui.View):
     ) -> None:
         if not self.in_crew:
             await interaction.response.send_message(
-                "Join a crew first (`/crew`).", ephemeral=True,
+                "Join a crew first (`/crew panel`).", ephemeral=True,
             )
             return
         zone = await self._require_zone(interaction)
@@ -274,7 +274,7 @@ class TerritoryMapView(discord.ui.View):
         del button
         if not self.in_crew:
             await interaction.response.send_message(
-                "Join a crew first (`/crew`).", ephemeral=True,
+                "Join a crew first (`/crew panel`).", ephemeral=True,
             )
             return
         zone = await self._require_zone(interaction)
@@ -288,7 +288,7 @@ class TerritoryMapView(discord.ui.View):
                 self.user_id, self.guild_id, defn.territory_id,
             )
             msgs = {
-                "not_in_crew": "Join a crew first (`/crew` → Join crew).",
+                "not_in_crew": "Join a crew first (`/crew panel` → Join crew).",
                 "crew_too_small": (
                     f"Need at least {config.TERRITORY_MIN_CREW_MEMBERS_TO_ATTACK} "
                     "crew members to attack."
@@ -338,7 +338,7 @@ class TerritoryMapView(discord.ui.View):
         del button
         if not self.in_crew:
             await interaction.response.send_message(
-                "Join a crew first (`/crew`).", ephemeral=True,
+                "Join a crew first (`/crew panel`).", ephemeral=True,
             )
             return
         zone = await self._require_zone(interaction)

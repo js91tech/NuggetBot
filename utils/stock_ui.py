@@ -41,7 +41,7 @@ async def build_market_embed(
     else:
         embed.add_field(
             name="Listings",
-            value="_No corporations yet — found a crew with `/crew`._",
+            value="_No corporations yet — found a crew with `/crew panel`._",
             inline=False,
         )
 

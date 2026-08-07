@@ -149,7 +149,7 @@ class Profile(commands.Cog):
             value=f"`{mana_bar(snap.current, snap.cap)}` {snap.current}/{snap.cap}",
             inline=False,
         )
-        class_text = class_id or "_No class — /class-choose_"
+        class_text = class_id or "_No class — /class choose_"
         embed.add_field(name="Class", value=f"`{class_text}`", inline=True)
         embed.add_field(name="Avatar", value=f"`{avatar_id}`", inline=True)
         if dealer_rank_val >= config.DEALER_RANK_CARTEL_TITLE:
@@ -207,7 +207,7 @@ class Profile(commands.Cog):
             notify_status = "DM reminders unlock after more activity"
         embed.add_field(name="Notifications", value=notify_status, inline=False)
 
-        crew_value = crew or "_None — /crew join_"
+        crew_value = crew or "_None — /crew panel_"
         if crew_loan is not None and float(crew_loan["remaining"]) > 0:
             crew_value += (
                 f"\nLoan: **{fmt_amount(float(crew_loan['remaining']))}** remaining"

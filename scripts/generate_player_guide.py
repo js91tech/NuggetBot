@@ -207,8 +207,8 @@ def build() -> None:
     pdf.bullet("Max prestige 10 - stacks +1% crit and +2% income per level")
     pdf.ln(2)
     pdf.body("Classes:")
-    pdf.bullet("/class-choose - pick Vanguard, Mogul, or Shade (one time)")
-    pdf.bullet("/class - view XP and modifiers; /class-evolve when ready")
+    pdf.bullet("/class choose - pick Vanguard, Mogul, or Shade (one time)")
+    pdf.bullet("/class - view XP and modifiers; /class evolve when ready")
     pdf.bullet("Earn class XP from duels and boss /attack damage")
     pdf.bullet("Hybrids Warlord and Archon unlock after two master paths")
     pdf.ln(2)
@@ -250,7 +250,7 @@ def build() -> None:
         ("Economy", "/daily, /balance, /pay, /leaderboard, /hall-of-fame"),
         ("Shop", "/shop, /buy, /inventory, /equip, /sell, /stats"),
         ("Raid", "/boss, /attack, /raid-leaderboard, /heal"),
-        ("Progress", "/class, /class-choose, /class-evolve, /mana, /skills, /cast"),
+        ("Progress", "/class, /class choose, /class evolve, /mana, /skills, /cast"),
         ("More", "/achievements, /prestige, /craft, /event, /quests, /jobs, /work"),
         ("Crime", "/heist, /arrest, /bounty, /bounties, /hack, /transfer"),
         ("PvP", "/duel, /coinflip, /coinflip-duel, /blackjack"),

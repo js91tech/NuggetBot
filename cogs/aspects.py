@@ -18,6 +18,12 @@ class Aspects(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
+    aspects_group = app_commands.Group(
+        name="aspects",
+        description="Collect, buy, equip, and fuse combat aspects.",
+        guild_only=True,
+    )
+
     async def _equipped_slot_map(self, user_id: int, guild_id: int) -> dict[int, int]:
         rows = await self.bot.db.list_equipped_aspect_slots(user_id, guild_id)
         return {int(row["instance_id"]): int(row["slot"]) for row in rows}
@@ -57,13 +63,12 @@ class Aspects(commands.Cog):
                 break
         return choices
 
-    @app_commands.command(
-        name="aspects",
+    @aspects_group.command(
+        name="list",
         description="View your collected aspects (Diablo-style combat modifiers).",
     )
     @app_commands.describe(user="Player to inspect. Defaults to you.")
-    @app_commands.guild_only()
-    async def aspects(
+    async def aspects_list(
         self,
         interaction: discord.Interaction,
         user: discord.Member | None = None,
@@ -77,7 +82,7 @@ class Aspects(commands.Cog):
         if not rows:
             await interaction.response.send_message(
                 f"{target.display_name} has no aspects yet. "
-                f"Boss kills can drop them, or buy one for **{fmt_amount(config.ASPECT_SHOP_PRICE)}** with `/buy-aspect`.",
+                f"Boss kills can drop them, or buy one for **{fmt_amount(config.ASPECT_SHOP_PRICE)}** with `/aspects buy`.",
                 ephemeral=True,
             )
             return
@@ -100,21 +105,20 @@ class Aspects(commands.Cog):
             color=discord.Color.purple(),
         )
         if len(lines) > 15:
-            embed.set_footer(text=f"+{len(lines) - 15} more · /equip-aspect · /unequip-aspect")
+            embed.set_footer(text=f"+{len(lines) - 15} more · /aspects equip · /aspects unequip")
         else:
             embed.set_footer(
                 text=(
                     f"Equip up to {config.ASPECT_MAX_EQUIP_SLOTS} at once: "
-                    "/equip-aspect [id] [slot 1-3]"
+                    "/aspects equip [id] [slot 1-3]"
                 ),
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(
-        name="aspect-shop",
+    @aspects_group.command(
+        name="shop",
         description="Browse aspect types and shop pricing.",
     )
-    @app_commands.guild_only()
     async def aspect_shop(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -125,7 +129,7 @@ class Aspects(commands.Cog):
         embed = discord.Embed(
             title="Aspect Shop",
             description=(
-                f"Buy a random rolled aspect for **{fmt_amount(config.ASPECT_SHOP_PRICE)}** with `/buy-aspect`.\n"
+                f"Buy a random rolled aspect for **{fmt_amount(config.ASPECT_SHOP_PRICE)}** with `/aspects buy`.\n"
                 "Shop rolls land between **4%** and **14%**. Boss drops scale with threat tier "
                 "(harder bosses = higher rolls, up to **40%** on mythic-tier raids).\n"
                 "Utility aspects affect duels/hr, work income (up to **3×**), energy regen, "
@@ -139,12 +143,11 @@ class Aspects(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(
-        name="buy-aspect",
+    @aspects_group.command(
+        name="buy",
         description=f"Buy random aspect roll(s) for {config.ASPECT_SHOP_PRICE:,.0f} nuggets each.",
     )
     @app_commands.describe(quantity="How many aspects to buy (1–99)")
-    @app_commands.guild_only()
     async def buy_aspect(
         self,
         interaction: discord.Interaction,
@@ -184,19 +187,19 @@ class Aspects(commands.Cog):
             )
         if len(instance_ids) > 8:
             lines.append(f"_…and {len(instance_ids) - 8} more_")
-        body = "\n".join(lines) if lines else "_Rolls saved — check `/aspects`_"
+        body = "\n".join(lines) if lines else "_Rolls saved — check `/aspects list`_"
         await interaction.response.send_message(
             f"Bought **{qty}×** aspect(s) for **{fmt_amount(total)}**.\n{body}\n"
-            f"Equip with `/equip-aspect` (up to **{config.ASPECT_MAX_EQUIP_SLOTS}** slots).",
+            f"Equip with `/aspects equip` (up to **{config.ASPECT_MAX_EQUIP_SLOTS}** slots).",
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="equip-aspect",
+    @aspects_group.command(
+        name="equip",
         description=f"Equip an aspect (up to {config.ASPECT_MAX_EQUIP_SLOTS} slots).",
     )
     @app_commands.describe(
-        instance_id="Aspect instance id from /aspects",
+        instance_id="Aspect instance id from /aspects list",
         slot="Slot 1–3 (optional — uses first empty slot)",
     )
     @app_commands.autocomplete(instance_id=aspect_instance_autocomplete)
@@ -207,7 +210,6 @@ class Aspects(commands.Cog):
             app_commands.Choice(name="Slot 3", value=3),
         ],
     )
-    @app_commands.guild_only()
     async def equip_aspect(
         self,
         interaction: discord.Interaction,
@@ -222,7 +224,7 @@ class Aspects(commands.Cog):
             iid = int(raw)
         except ValueError:
             await interaction.response.send_message(
-                "Use the numeric id from `/aspects` (e.g. `42`).",
+                "Use the numeric id from `/aspects list` (e.g. `42`).",
                 ephemeral=True,
             )
             return
@@ -236,7 +238,7 @@ class Aspects(commands.Cog):
             if result == "full":
                 await interaction.response.send_message(
                     f"All **{config.ASPECT_MAX_EQUIP_SLOTS}** aspect slots are full. "
-                    "Use `/unequip-aspect` or pass a **slot** to replace one.",
+                    "Use `/aspects unequip` or pass a **slot** to replace one.",
                     ephemeral=True,
                 )
                 return
@@ -262,8 +264,8 @@ class Aspects(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="unequip-aspect",
+    @aspects_group.command(
+        name="unequip",
         description="Remove an aspect from an equip slot.",
     )
     @app_commands.describe(slot="Slot 1–3 to clear")
@@ -274,7 +276,6 @@ class Aspects(commands.Cog):
             app_commands.Choice(name="Slot 3", value=3),
         ],
     )
-    @app_commands.guild_only()
     async def unequip_aspect(self, interaction: discord.Interaction, slot: int) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -295,8 +296,8 @@ class Aspects(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="fuse-aspects",
+    @aspects_group.command(
+        name="fuse",
         description="Sacrifice 3 unequipped aspects to forge one stronger roll.",
     )
     @app_commands.describe(
@@ -307,7 +308,6 @@ class Aspects(commands.Cog):
     @app_commands.autocomplete(aspect1=aspect_instance_autocomplete)
     @app_commands.autocomplete(aspect2=aspect_instance_autocomplete)
     @app_commands.autocomplete(aspect3=aspect_instance_autocomplete)
-    @app_commands.guild_only()
     async def fuse_aspects(
         self,
         interaction: discord.Interaction,

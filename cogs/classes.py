@@ -20,6 +20,12 @@ class Classes(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
+    class_group = app_commands.Group(
+        name="class",
+        description="View, choose, and evolve your combat class.",
+        guild_only=True,
+    )
+
     async def _profile(self, user_id: int, guild_id: int) -> tuple[str | None, int, set[str]]:
         await self.bot.db.ensure_jester_class(user_id, guild_id)
         class_id = await self.bot.db.get_class_id(user_id, guild_id)
@@ -28,10 +34,11 @@ class Classes(commands.Cog):
         roots = await self.bot.db.get_master_roots(user_id, guild_id)
         return class_id, xp, roots
 
-    @app_commands.command(name="class", description="View your class, XP, and modifiers.")
+    @class_group.command(name="view", description="View your class, XP, and modifiers.")
     @app_commands.describe(user="Player to inspect (defaults to you).")
-    @app_commands.guild_only()
-    async def class_cmd(self, interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+    async def class_view(
+        self, interaction: discord.Interaction, user: discord.Member | None = None,
+    ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
@@ -43,7 +50,11 @@ class Classes(commands.Cog):
                 "No class yet. Pick a starter with `/class choose`.\n"
                 f"Starters: **{', '.join(STARTER_IDS)}**"
             )
-            embed = discord.Embed(title=f"{target.display_name}'s Class", description=desc, color=discord.Color.greyple())
+            embed = discord.Embed(
+                title=f"{target.display_name}'s Class",
+                description=desc,
+                color=discord.Color.greyple(),
+            )
         else:
             threshold = evolution_threshold(cls.tier)
             next_line = ""
@@ -51,13 +62,20 @@ class Classes(commands.Cog):
                 next_line = f"\nEvolve at **{threshold}** XP (you have **{xp}**)."
             options = can_evolve(class_id, xp, roots)
             if options:
-                next_line += f"\n**Ready to evolve:** {', '.join(o.name for o in options)} — use `/class evolve`."
+                next_line += (
+                    f"\n**Ready to evolve:** {', '.join(o.name for o in options)} "
+                    "— use `/class evolve`."
+                )
             embed = discord.Embed(
                 title=f"{cls.emoji} {cls.name}",
                 description=cls.description + next_line,
                 color=discord.Color.gold(),
             )
-            embed.add_field(name="Modifiers", value=format_modifiers_summary(cls.modifiers), inline=False)
+            embed.add_field(
+                name="Modifiers",
+                value=format_modifiers_summary(cls.modifiers),
+                inline=False,
+            )
             snap = await self.bot.db.get_mana_snapshot(target.id, interaction.guild_id)
             from utils.classes import is_healer_class
             from utils.mana import mana_bar
@@ -76,12 +94,11 @@ class Classes(commands.Cog):
                 embed.add_field(name="Master roots", value=", ".join(sorted(roots)), inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=user is None)
 
-    @app_commands.command(name="class-choose", description="Choose your starter class (one time).")
+    @class_group.command(name="choose", description="Choose your starter class (one time).")
     @app_commands.describe(starter="Starter class")
     @app_commands.choices(
         starter=[app_commands.Choice(name=s.title(), value=s) for s in STARTER_IDS],
     )
-    @app_commands.guild_only()
     async def class_choose(self, interaction: discord.Interaction, starter: str) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -99,7 +116,9 @@ class Classes(commands.Cog):
                 ephemeral=True,
             )
             return
-        ok, code = await self.bot.db.set_class_id(interaction.user.id, interaction.guild_id, starter)
+        ok, _code = await self.bot.db.set_class_id(
+            interaction.user.id, interaction.guild_id, starter,
+        )
         if not ok:
             await interaction.response.send_message("Could not set class.", ephemeral=True)
             return
@@ -109,8 +128,7 @@ class Classes(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="class-evolve", description="Evolve when you have enough class XP.")
-    @app_commands.guild_only()
+    @class_group.command(name="evolve", description="Evolve when you have enough class XP.")
     async def class_evolve(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -120,7 +138,9 @@ class Classes(commands.Cog):
             return
         class_id, xp, roots = await self._profile(interaction.user.id, interaction.guild_id)
         if not class_id:
-            await interaction.response.send_message("Choose a class first: `/class-choose`.", ephemeral=True)
+            await interaction.response.send_message(
+                "Choose a class first: `/class choose`.", ephemeral=True,
+            )
             return
         options = can_evolve(class_id, xp, roots)
         if not options:
@@ -142,15 +162,14 @@ class Classes(commands.Cog):
         else:
             names = "\n".join(f"`{o.class_id}` — **{o.name}**" for o in options)
             await interaction.response.send_message(
-                f"Pick one with `/class-evolve-to`:\n{names}",
+                f"Pick one with `/class evolve-to`:\n{names}",
                 ephemeral=True,
             )
             return
         await self._apply_evolution(interaction, chosen.class_id)
 
-    @app_commands.command(name="class-evolve-to", description="Evolve into a specific class.")
-    @app_commands.describe(class_id="Class id from /class")
-    @app_commands.guild_only()
+    @class_group.command(name="evolve-to", description="Evolve into a specific class.")
+    @app_commands.describe(class_id="Class id from /class view")
     async def class_evolve_to(self, interaction: discord.Interaction, class_id: str) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -159,7 +178,9 @@ class Classes(commands.Cog):
         class_id_cur, xp, roots = await self._profile(interaction.user.id, interaction.guild_id)
         options = {o.class_id: o for o in can_evolve(class_id_cur, xp, roots)}
         if class_id not in options:
-            await interaction.response.send_message("That evolution is not available.", ephemeral=True)
+            await interaction.response.send_message(
+                "That evolution is not available.", ephemeral=True,
+            )
             return
         await self._apply_evolution(interaction, class_id)
 
@@ -180,8 +201,7 @@ class Classes(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="class-tree", description="Browse the class evolution tree.")
-    @app_commands.guild_only()
+    @class_group.command(name="tree", description="Browse the class evolution tree.")
     async def class_tree(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
@@ -198,7 +218,7 @@ class Classes(commands.Cog):
             description="\n".join(lines[:20]),
             color=discord.Color.blue(),
         )
-        embed.set_footer(text="Use /class-choose then /class-evolve")
+        embed.set_footer(text="Use /class choose then /class evolve")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

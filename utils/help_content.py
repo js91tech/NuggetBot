@@ -21,14 +21,14 @@ HELP_PAGES: tuple[tuple[str, str], ...] = (
     (
         "PvP & casino",
         "**/duel** · **/coinflip** · **/blackjack** · **/slots** · **/jackpot**\n"
-        "**/crew** — corporation panel (join, vault, loans, corporate upgrades, projects, war standings)\n"
+        "**/crew** — `/crew panel` (join, vault, loans) · `/crew raid` · `/crew raid-drugs` · `/crew raid-business`\n"
         "**/territory** — map panel with guard hiring, zones, sieges\n"
         "**/business** — income, upgrades, tiers, districts, compete/defend, market, prestige & mega projects\n"
         "**/drugs** — grow lab (plant/harvest/use), `/drugs gift`, `/drugs catalog`, `/drugs stash`, street sales & black market\n"
     ),
     (
         "Character",
-        "**/class** · **/cast** · **/mana** · **/aspects** · **/avatar** (upload custom)\n"
+        "**/class** — `/class view|choose|evolve|tree` · **/cast** · **/mana** · **/aspects** · **/avatar** (upload custom)\n"
         "**/use** — raid potion, energy drink, **Jail Key**, **Pick Key** · **/gift-item** — chia seeds · **/drugs gift** — stash product\n"
         "**/attributes** — interactive stat panel (50 pt pool +5/prestige; 15 + prestige/stat cap)\n"
         "**/profile** · **/stats** · **/inventory** · **/quests** · **/achievements** · **/fix** (unstable gear)\n"

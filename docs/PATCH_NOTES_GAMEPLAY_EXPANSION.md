@@ -7,7 +7,7 @@
 - `database_expansion.py` mixin
 
 ## PR2 — Combat Chase
-- `/relics`, `/equip-relic`, `/unequip-relic`
+- `/relics`, `/relics equip`, `/relics unequip`
 - `/companion` (status/equip/unequip)
 - Gear affixes on dungeon accessory drops
 - Alchemy expanded to 9 recipes with blueprint gates
@@ -26,4 +26,4 @@
 - Boss/vault relic and companion drops
 
 ## New Commands
-`/relics` · `/equip-relic` · `/unequip-relic` · `/companion` · `/codex` · `/contracts` · `/museum` · `/expedition` · `/drugs crossbreed` · `/season` (shop/redeem)
+`/relics` · `/relics equip` · `/relics unequip` · `/companion` · `/codex` · `/contracts` · `/museum` · `/expedition` · `/drugs crossbreed` · `/season` (shop/redeem)

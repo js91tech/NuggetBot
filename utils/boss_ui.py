@@ -332,7 +332,7 @@ class BossFightView(discord.ui.View):
         class_id = await self.cog.bot.db.get_class_id(self.user_id, self.guild_id)
         if not class_id:
             await interaction.response.send_message(
-                "Choose a class with `/class-choose` first.", ephemeral=True,
+                "Choose a class with `/class choose` first.", ephemeral=True,
             )
             return
         skills = skills_for_class(class_id)

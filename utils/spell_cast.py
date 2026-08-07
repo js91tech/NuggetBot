@@ -28,7 +28,7 @@ async def cast_skill_for_user(
     if class_id is None:
         class_id = await db.get_class_id(user_id, guild_id)
     if not class_id:
-        return CastResult(ok=False, error="Choose a class with `/class-choose` first.")
+        return CastResult(ok=False, error="Choose a class with `/class choose` first.")
 
     skill_def = get_skill(skill_id)
     if skill_def is None or not skill_available(skill_def, class_id):

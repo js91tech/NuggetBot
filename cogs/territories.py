@@ -281,7 +281,7 @@ class Territories(commands.Cog):
             try:
                 err = await self.bot.db.start_territory_siege(uid, guild_id, defn.territory_id)
                 msgs = {
-                    "not_in_crew": "Join a crew first (`/crew` → Join crew).",
+                    "not_in_crew": "Join a crew first (`/crew panel` → Join crew).",
                     "crew_too_small": (
                         f"Need at least {config.TERRITORY_MIN_CREW_MEMBERS_TO_ATTACK} "
                         "crew members to attack."

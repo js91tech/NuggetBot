@@ -29,6 +29,12 @@ class Crews(commands.Cog):
         if hasattr(bot, "wait_until_ready"):
             self.corporate_war_tick.start()
 
+    crew_group = app_commands.Group(
+        name="crew",
+        description="Crew bank, membership, and raids.",
+        guild_only=True,
+    )
+
     def cog_unload(self) -> None:
         self.corporate_war_tick.cancel()
 
@@ -192,13 +198,12 @@ class Crews(commands.Cog):
                 break
         return choices
 
-    @app_commands.command(
-        name="crew-raid",
-        description="Launch a crew-vs-crew bank raid. Win automated duels to steal 10% of their treasury.",
+    @crew_group.command(
+        name="raid",
+        description="Raid another crew's bank. Win duels to steal from their treasury.",
     )
-    @app_commands.describe(target_crew="Crew whose bank you want to raid")
+    @app_commands.describe(target_crew="Crew whose bank you want to hit")
     @app_commands.autocomplete(target_crew=raid_target_autocomplete)
-    @app_commands.guild_only()
     async def crew_raid(
         self,
         interaction: discord.Interaction,
@@ -213,13 +218,12 @@ class Crews(commands.Cog):
             logger.exception("crew-raid failed guild=%s user=%s", interaction.guild_id, interaction.user.id)
             await send_error(interaction, "Could not open the crew raid panel. Try again in a moment.")
 
-    @app_commands.command(
-        name="crew-raid-drugs",
+    @crew_group.command(
+        name="raid-drugs",
         description="Raid another crew's cartel drug stash. Win duels to steal 2–5 random units.",
     )
     @app_commands.describe(target_crew="Crew whose cartel lab you want to hit")
     @app_commands.autocomplete(target_crew=drug_raid_target_autocomplete)
-    @app_commands.guild_only()
     async def crew_raid_drugs(
         self,
         interaction: discord.Interaction,
@@ -236,13 +240,12 @@ class Crews(commands.Cog):
             )
             await send_error(interaction, "Could not open the drug raid panel. Try again in a moment.")
 
-    @app_commands.command(
-        name="crew-raid-business",
+    @crew_group.command(
+        name="raid-business",
         description="Raid another crew's business vaults. Win duels to steal 10% of uncollected income.",
     )
     @app_commands.describe(target_crew="Crew whose businesses you want to hit")
     @app_commands.autocomplete(target_crew=business_raid_target_autocomplete)
-    @app_commands.guild_only()
     async def crew_raid_business(
         self,
         interaction: discord.Interaction,
@@ -261,8 +264,8 @@ class Crews(commands.Cog):
                 interaction, "Could not open the business raid panel. Try again in a moment.",
             )
 
-    @app_commands.command(
-        name="crew",
+    @crew_group.command(
+        name="panel",
         description="Crew bank panel: join, deposit, withdraw, loans, repay, leaderboard.",
     )
     @app_commands.describe(
@@ -283,8 +286,7 @@ class Crews(commands.Cog):
         ],
     )
     @app_commands.autocomplete(name=crew_name_autocomplete)
-    @app_commands.guild_only()
-    async def crew(
+    async def crew_panel(
         self,
         interaction: discord.Interaction,
         action: str,
@@ -340,7 +342,7 @@ class Crews(commands.Cog):
                 await interaction.response.send_message("You left your crew.", ephemeral=True)
             elif result == "active_loan":
                 await interaction.response.send_message(
-                    "Repay your crew loan first (`/crew` → Repay loan).", ephemeral=True,
+                    "Repay your crew loan first (`/crew panel` → Repay loan).", ephemeral=True,
                 )
             else:
                 await interaction.response.send_message(

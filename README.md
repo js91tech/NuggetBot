@@ -98,7 +98,7 @@ python bot.py
 
 Unstable gear gives **no stat bonuses** until repaired for **80%** of the item's shop price (`/fix`).
 
-| `/crew` | Interactive crew panel |
+| `/crew panel` | Interactive crew panel |
 
 ### Hacker
 
@@ -143,14 +143,14 @@ Five avatars ship with the bot (`nugget_raider` is free). Regenerate art with `p
 | `/sell-worn` | Sell all battle-worn drops |
 | `/use` | Raid potion, energy drink |
 | `/dungeon` | Solo standard dungeon panel (25 energy) · unlock Gilded Vault (50k) for a 3+ raider party raid |
-| `/crew` | Interactive crew panel — join, deposit, withdraw, loans, repay |
+| `/crew panel` | Interactive crew panel — join, deposit, withdraw, loans, repay |
 | `/slots` · `/jackpot` | Casino slots + server jackpot |
 
 ### Crew banking
 
 Persistent crews share a **treasury** funded by member deposits. Deposits earn crew **XP** and raise **level**, which unlocks higher loan caps and lower interest.
 
-| `/crew` action | What it does |
+| `/crew panel` action | What it does |
 |----------------|--------------|
 | **Bank / status** | Opens the interactive crew panel (treasury, deposits, loans, buttons) |
 | **Deposit** | Move nuggets from your wallet into the crew treasury (tracks your contribution) |
@@ -175,7 +175,7 @@ Five zones per server (**Docks** → **Citadel**). Crews hold zones for **hourly
 Max **3 zones per crew**. Siege cooldown **12h** per zone after an attack.
 
 **Zone perks** (while your crew holds the zone): Docks +5% heist loot · Market +5% sell · Foundry −5% craft cost · Vault +3% heist success · Citadel +10% Citadel income.
-| `/fuse-aspects` | Burn 3 aspects → stronger roll |
+| `/aspects fuse` | Burn 3 aspects → stronger roll |
 
 ### Shop and Gear
 
