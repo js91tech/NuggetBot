@@ -188,6 +188,8 @@ LAUNCH_GRANT_ARMOR_ID = "cardboard_shield"
 BOSS_AUTO_SPAWN_MIN_SECONDS = 90 * 60
 BOSS_AUTO_SPAWN_MAX_SECONDS = 90 * 60
 BOSS_AUTO_SPAWN_POLL_SECONDS = 60
+# When a living boss blocks auto-spawn, retry after this many seconds (not the full 90m).
+BOSS_AUTO_SPAWN_RETRY_SECONDS = 120
 # Fraction of max HP removed per real-time minute while a boss is active (passive anti-stall).
 BOSS_PASSIVE_HP_DECAY_FRACTION_PER_MINUTE = 0.01
 # How often to run the passive decay job (decay math still uses whole minutes).

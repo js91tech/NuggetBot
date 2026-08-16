@@ -1026,6 +1026,30 @@ class Boss(commands.Cog):
         )
         self._auto_spawn_due_at[guild_id] = ts + delay
 
+    def _schedule_auto_spawn_retry(self, guild_id: int, *, now: float | None = None) -> None:
+        """Soon retry when a living/zombie boss blocked the spawn attempt."""
+        ts = time.time() if now is None else now
+        self._auto_spawn_due_at[guild_id] = ts + config.BOSS_AUTO_SPAWN_RETRY_SECONDS
+        # Suppress another "Raid inbound" warning while we are only waiting to clear/retry.
+        self._spawn_warned.add(guild_id)
+
+    async def _safe_finish_collapsed_boss(
+        self,
+        guild: discord.Guild,
+        *,
+        killer_user_id: int | None = None,
+    ) -> None:
+        try:
+            await self._complete_boss_defeat(
+                guild,
+                interaction=None,
+                killer_user_id=killer_user_id,
+            )
+        except Exception:
+            logging.exception(
+                "Failed to finish collapsed boss in guild %s", guild.id,
+            )
+
     @tasks.loop(seconds=config.BOSS_AUTO_SPAWN_POLL_SECONDS)
     async def auto_spawn(self) -> None:
         now = time.time()
@@ -1043,12 +1067,17 @@ class Boss(commands.Cog):
                     logging.exception("Boss spawn warning failed for guild %s", guild_id)
             if now < due:
                 continue
-            self._spawn_warned.discard(guild_id)
-            self._schedule_next_auto_spawn(guild_id, now=now)
             try:
-                await self._try_auto_spawn_guild(guild)
+                spawned = await self._try_auto_spawn_guild(guild)
             except Exception:
                 logging.exception("Auto boss spawn failed for guild %s", guild_id)
+                self._schedule_auto_spawn_retry(guild_id, now=now)
+                continue
+            if spawned:
+                self._spawn_warned.discard(guild_id)
+                self._schedule_next_auto_spawn(guild_id, now=now)
+            else:
+                self._schedule_auto_spawn_retry(guild_id, now=now)
 
     async def _send_spawn_warning(self, guild: discord.Guild, remaining: float) -> None:
         channel = await resolve_bot_announcement_channel(guild, self.bot.db)
@@ -1063,13 +1092,21 @@ class Boss(commands.Cog):
             gate=gate,
         )
 
-    async def _try_auto_spawn_guild(self, guild: discord.Guild) -> None:
-        boss = await self.bot.db.get_active_boss(guild.id)
+    async def _try_auto_spawn_guild(self, guild: discord.Guild) -> bool:
+        """Spawn a boss if the guild is clear. Returns True if a new boss was spawned."""
+        boss = await self.bot.db.apply_boss_passive_decay(guild.id)
         if boss is not None:
             if self.bot.db.boss_has_expired(boss):
                 await self._despawn_boss_timeout(guild)
+            elif float(boss["hp"]) <= 0:
+                # Collapse payouts in the background so the spawn loop stays responsive.
+                asyncio.create_task(self._safe_finish_collapsed_boss(guild))
+                return False
             else:
-                return
+                return False
+
+        if await self.bot.db.get_active_boss(guild.id) is not None:
+            return False
 
         event = await self.bot.db.get_active_guild_event(guild.id)
         world_week = (
@@ -1104,6 +1141,7 @@ class Boss(commands.Cog):
         boss_row = await self.bot.db.get_active_boss(guild.id)
         elem = str(boss_row["element"]) if boss_row else None
         await self._send_boss_spawn_embed(guild, variant=variant, hp=hp, element=elem)
+        return True
 
     @auto_spawn.before_loop
     async def before_auto_spawn(self) -> None:
@@ -1867,11 +1905,10 @@ class Boss(commands.Cog):
             return
 
         if float(boss_row["hp"]) <= 0:
-            await self._complete_boss_defeat(
-                interaction.guild,
-                interaction=interaction,
-                killer_user_id=None,
+            await interaction.followup.send(
+                "The boss has collapsed — resolving payouts in the raid channel now.",
             )
+            asyncio.create_task(self._safe_finish_collapsed_boss(interaction.guild))
             return
 
         embed, err = await self.build_boss_fight_embed(
