@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import config
+from utils.character_hub_ui import send_character_hub
 from utils.classes import (
     CLASS_MAP,
     STARTER_IDS,
@@ -42,7 +43,10 @@ class Classes(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        target = user or interaction.user
+        if user is None:
+            await send_character_hub(self, interaction)
+            return
+        target = user
         class_id, xp, roots = await self._profile(target.id, interaction.guild_id)
         cls = get_class(class_id)
         if cls is None:
@@ -92,7 +96,7 @@ class Classes(commands.Cog):
             )
             if roots:
                 embed.add_field(name="Master roots", value=", ".join(sorted(roots)), inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=user is None)
+        await interaction.response.send_message(embed=embed)
 
     @class_group.command(name="choose", description="Choose your starter class (one time).")
     @app_commands.describe(starter="Starter class")

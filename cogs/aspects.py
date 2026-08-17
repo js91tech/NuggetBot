@@ -145,7 +145,7 @@ class Aspects(commands.Cog):
 
     @aspects_group.command(
         name="buy",
-        description=f"Buy random aspect roll(s) for {config.ASPECT_SHOP_PRICE:,.0f} nuggets each.",
+        description=f"Buy random aspect roll(s) for {config.ASPECT_SHOP_PRICE:,.0f} {config.CURRENCY_NAME} each.",
     )
     @app_commands.describe(quantity="How many aspects to buy (1–99)")
     async def buy_aspect(

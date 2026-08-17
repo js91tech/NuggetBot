@@ -79,8 +79,8 @@ class Admin(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @admin_group.command(name="gift", description="Give nuggets to a user.")
-    @app_commands.describe(user="User to receive nuggets", amount="Amount to create")
+    @admin_group.command(name="gift", description="Give goonbux to a user.")
+    @app_commands.describe(user="User to receive goonbux", amount="Amount to create")
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(administrator=True)
     async def gift(
@@ -105,7 +105,7 @@ class Admin(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @admin_group.command(name="gift-all", description="Give nuggets to every human.")
+    @admin_group.command(name="gift-all", description="Give goonbux to every human.")
     @app_commands.describe(amount="Amount each human receives")
     @app_commands.guild_only()
     @app_commands.checks.has_permissions(administrator=True)

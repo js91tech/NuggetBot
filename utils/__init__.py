@@ -1,1 +1,1 @@
-"""Shared utilities for NuggetBot."""
+"""Shared utilities for GoonBot."""

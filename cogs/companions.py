@@ -4,7 +4,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.companions import COMPANION_DEFINITIONS, companion_by_id
+from utils.companion_hub_ui import send_companion_hub
+from utils.companions import companion_by_id
 from utils.helpers import guild_only_message
 
 
@@ -35,26 +36,7 @@ class Companions(commands.Cog):
         gid = interaction.guild_id
 
         if action == "status":
-            owned = await self.bot.db.list_companions(uid, gid)
-            equipped = await self.bot.db.get_equipped_companion_id(uid, gid)
-            if not owned:
-                await interaction.response.send_message(
-                    "No henchlings yet. Raid adds and vault clears can drop them.",
-                    ephemeral=True,
-                )
-                return
-            lines = []
-            for row in owned:
-                cid = str(row["companion_id"])
-                defn = companion_by_id(cid)
-                if defn is None:
-                    continue
-                mark = " **(active)**" if cid == equipped else ""
-                lines.append(f"{defn.emoji} **{defn.name}**{mark} — _{defn.description}_")
-            await interaction.response.send_message(
-                f"**Companion Dex** ({len(owned)}/{len(COMPANION_DEFINITIONS)})\n\n" + "\n".join(lines),
-                ephemeral=True,
-            )
+            await send_companion_hub(self, interaction)
             return
 
         if action == "equip":

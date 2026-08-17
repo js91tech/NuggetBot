@@ -61,7 +61,7 @@ WEAPONS: tuple[ShopItem, ...] = (
     ),
     ShopItem(
         "nugget_excalibur",
-        "Nugget Excalibur",
+        "Goon Excalibur",
         "weapon",
         120_000,
         295,
@@ -81,7 +81,7 @@ WEAPONS: tuple[ShopItem, ...] = (
     ),
     ShopItem(
         "apex_nuggetblade",
-        "Apex Nuggetblade",
+        "Apex Goonblade",
         "weapon",
         500_000,
         344,
@@ -244,7 +244,7 @@ GUNS: tuple[ShopItem, ...] = (
     ),
     ShopItem(
         "nugget_minigun",
-        "Nugget Minigun",
+        "Goon Minigun",
         "gun",
         125_000,
         295,
@@ -346,7 +346,7 @@ ARMOR: tuple[ShopItem, ...] = (
     ShopItem("celestial_aegis", "Celestial Aegis", "armor", 82_000, 179, "A wearable constellation.", hp_bonus=309),
     ShopItem(
         "nugget_immortal_plate",
-        "Nugget Immortal Plate",
+        "Goon Immortal Plate",
         "armor",
         120_000,
         200,
@@ -368,7 +368,7 @@ ARMOR: tuple[ShopItem, ...] = (
         "armor",
         500_000,
         231,
-        "Matched plating for the Apex Nuggetblade set.",
+        "Matched plating for the Apex Goonblade set.",
         hp_bonus=404,
     ),
     ShopItem(
@@ -435,13 +435,13 @@ BOSS_SLAYER_MAIL = ShopItem(
     "armor",
     6_500,
     84,
-    "Plates tempered in Hannah's defeat — prized raid salvage.",
+    "Plates tempered in Velvet Vixen's defeat — prized raid salvage.",
     hp_bonus=148,
     shop_listed=False,
 )
 MYTHIC_RAID_BLADE = ShopItem(
     "mythic_raid_blade",
-    "Hannah's Shattered Fang",
+    "Velvet's Shattered Fang",
     "weapon",
     0,
     142,
@@ -452,7 +452,7 @@ MYTHIC_RAID_BLADE = ShopItem(
 )
 MYTHIC_RAID_MAIL = ShopItem(
     "mythic_raid_mail",
-    "Hannah's Aegis Fragment",
+    "Velvet's Aegis Fragment",
     "armor",
     0,
     98,
@@ -896,7 +896,7 @@ def get_item(item_id: str) -> ShopItem | None:
 
 
 def sell_refund_for_item(item: ShopItem) -> float | None:
-    """Nuggets received when selling one copy (half shop price, minimum 1)."""
+    """Goonbux received when selling one copy (half shop price, minimum 1)."""
     if item.price <= 0:
         return None
     return float(max(1, int(item.price // 2)))

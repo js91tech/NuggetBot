@@ -8,6 +8,7 @@ import config
 from utils.energy import energy_snapshot
 from utils.helpers import fmt_amount, guild_only_message
 from utils.jobs import JOBS, get_job, roll_job_payout
+from utils.jobs_hub_ui import send_jobs_hub
 from utils.quests import record_quest_event
 
 
@@ -52,37 +53,13 @@ class Jobs(commands.Cog):
         )
         return text, snap.current, snap.cap
 
-    @app_commands.command(name="jobs", description="Browse jobs and your energy.")
+    @app_commands.command(name="jobs", description="Open the jobs hub — browse hustles and work a shift.")
     @app_commands.guild_only()
     async def jobs(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-
-        energy_text, _, cap = await self._energy_display(interaction.user.id, interaction.guild_id)
-        lines = [
-            f"{job.emoji} **{job.name}** (`{job.job_id}`) — "
-            f"**{job.energy_cost}** energy → "
-            f"**{fmt_amount(job.payout_min)}–{fmt_amount(job.payout_max)}**"
-            for job in JOBS
-        ]
-        embed = discord.Embed(
-            title="Jobs board",
-            description="\n".join(lines),
-            color=discord.Color.teal(),
-        )
-        embed.add_field(name="Your energy", value=energy_text, inline=False)
-        embed.add_field(
-            name="Expand cap",
-            value=(
-                f"`/upgrade-energy` — **{fmt_amount(config.ENERGY_UPGRADE_COST)}** "
-                f"for **+{config.ENERGY_CAP_PER_UPGRADE}** max energy "
-                f"(current cap **{cap}**)"
-            ),
-            inline=False,
-        )
-        embed.set_footer(text="Instant shifts: /work <job>")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await send_jobs_hub(self, interaction)
 
     @app_commands.command(name="work", description="Work a job instantly (costs energy).")
     @app_commands.describe(job="Job to work")

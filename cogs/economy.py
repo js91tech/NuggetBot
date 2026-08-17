@@ -206,7 +206,7 @@ class Economy(commands.Cog):
     async def before_vc_earning_tick(self) -> None:
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="daily", description="Claim your daily nuggets.")
+    @app_commands.command(name="daily", description="Claim your daily goonbux.")
     @app_commands.guild_only()
     async def daily(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:
@@ -288,7 +288,7 @@ class Economy(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @app_commands.command(name="deposit", description="Move nuggets from pocket to bank.")
+    @app_commands.command(name="deposit", description="Move goonbux from pocket to bank.")
     @app_commands.describe(amount="Amount to deposit (omit with Dep all in /balance panel)")
     @app_commands.guild_only()
     async def deposit(
@@ -305,7 +305,7 @@ class Economy(commands.Cog):
         wallet = await self.bot.db.get_balance(interaction.user.id, interaction.guild_id)
         if wallet < amount:
             await interaction.response.send_message(
-                "You do not have enough nuggets in your pocket.", ephemeral=True
+                "You do not have enough goonbux in your pocket.", ephemeral=True
             )
             return
         room = await self.bot.db.get_bank_deposit_room(
@@ -385,7 +385,7 @@ class Economy(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="withdraw", description="Move nuggets from bank to pocket.")
+    @app_commands.command(name="withdraw", description="Move goonbux from bank to pocket.")
     @app_commands.describe(amount="Amount to withdraw")
     @app_commands.guild_only()
     async def withdraw(
@@ -406,7 +406,7 @@ class Economy(commands.Cog):
         )
         if not ok:
             await interaction.response.send_message(
-                "You do not have enough nuggets in your bank.", ephemeral=True
+                "You do not have enough goonbux in your bank.", ephemeral=True
             )
             return
         await interaction.response.send_message(
@@ -441,7 +441,7 @@ class Economy(commands.Cog):
         embed.set_footer(text="Ranked by pocket + bank (net worth)")
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="pay", description="Send nuggets to another user.")
+    @app_commands.command(name="pay", description="Send goonbux to another user.")
     @app_commands.describe(user="User to pay", amount="Amount to send")
     @app_commands.guild_only()
     async def pay(
@@ -469,7 +469,7 @@ class Economy(commands.Cog):
         )
         if not paid:
             await interaction.response.send_message(
-                "You do not have enough nuggets.", ephemeral=True
+                "You do not have enough goonbux.", ephemeral=True
             )
             return
 

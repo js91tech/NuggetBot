@@ -42,7 +42,7 @@ def build_trade_embed(
     embed.add_field(name="To", value=receiver.mention, inline=True)
     lines: list[str] = []
     if nuggets > 0:
-        lines.append(f"**{fmt_amount(nuggets)}** nuggets")
+        lines.append(f"**{fmt_amount(nuggets)}** {config.CURRENCY_NAME}")
     for drug_id, qty in drugs.items():
         defn = drug_by_id(drug_id)
         name = defn.name if defn else drug_id
@@ -68,7 +68,7 @@ def build_trade_embed(
     return embed
 
 
-class NuggetsModal(discord.ui.Modal, title="Trade nuggets"):
+class NuggetsModal(discord.ui.Modal, title="Trade goonbux"):
     def __init__(self, view: "TradeBuildView") -> None:
         super().__init__()
         self._view = view
@@ -235,7 +235,7 @@ class TradeBuildView(discord.ui.View):
             gear_rows=instances,
         )
 
-    @discord.ui.button(label="Set nuggets", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Set goonbux", style=discord.ButtonStyle.secondary, row=2)
     async def set_nuggets(
         self, interaction: discord.Interaction, button: discord.ui.Button,
     ) -> None:
@@ -280,7 +280,7 @@ class TradeBuildView(discord.ui.View):
             "too_many_drugs": "Too many drug types.",
             "too_many_gear": "Too much gear.",
             "trade_busy": "You or they already have a pending trade.",
-            "insufficient_nuggets": "Not enough nuggets.",
+            "insufficient_nuggets": "Not enough goonbux.",
             "insufficient_drugs": "Not enough product in stash.",
             "invalid_gear": "Gear unavailable (equipped or missing).",
         }

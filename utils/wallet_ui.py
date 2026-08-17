@@ -6,6 +6,7 @@ import discord
 
 import config
 from utils.bank_expansion_ui import format_bank_expansion_roster
+from utils.goon_theme import brand_color
 from utils.helpers import fmt_amount
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ def build_wallet_embed(
     net = wallet + bank
     embed = discord.Embed(
         title=f"{member.display_name}'s Vault",
-        color=discord.Color.gold(),
+        color=brand_color(),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="Pocket", value=fmt_amount(wallet), inline=True)
@@ -67,7 +68,7 @@ async def build_wallet_embed_for_user(
 class DepositModal(discord.ui.Modal, title="Deposit to bank"):
     amount = discord.ui.TextInput(
         label="Amount",
-        placeholder="How many nuggets to deposit?",
+        placeholder=f"How many {config.CURRENCY_NAME} to deposit?",
         required=True,
         max_length=16,
     )
@@ -93,7 +94,7 @@ class DepositModal(discord.ui.Modal, title="Deposit to bank"):
         room = await self.cog.bot.db.get_bank_deposit_room(self.user_id, self.guild_id)
         if wallet < value:
             await interaction.response.send_message(
-                "You do not have enough nuggets in your pocket.", ephemeral=True
+                f"You do not have enough {config.CURRENCY_NAME} in your pocket.", ephemeral=True
             )
             return
         if room <= 0:
@@ -128,7 +129,7 @@ class DepositModal(discord.ui.Modal, title="Deposit to bank"):
 class WithdrawModal(discord.ui.Modal, title="Withdraw from bank"):
     amount = discord.ui.TextInput(
         label="Amount",
-        placeholder="How many nuggets to withdraw?",
+        placeholder=f"How many {config.CURRENCY_NAME} to withdraw?",
         required=True,
         max_length=16,
     )
@@ -154,7 +155,7 @@ class WithdrawModal(discord.ui.Modal, title="Withdraw from bank"):
         ok = await self.cog.bot.db.withdraw_from_bank(self.user_id, self.guild_id, value)
         if not ok:
             await interaction.followup.send(
-                "You do not have enough nuggets in your bank.", ephemeral=True
+                f"You do not have enough {config.CURRENCY_NAME} in your bank.", ephemeral=True
             )
             return
         member = interaction.user

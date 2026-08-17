@@ -1,4 +1,4 @@
-"""Raid adds: Hannah's Henchmen and Court of Kitty's Jesters."""
+"""Raid adds: Velvet Vixen's Henchmen and Court of Kitty's Jesters."""
 from __future__ import annotations
 
 import random
@@ -11,12 +11,12 @@ import config
 ADD_TYPES = ("henchman", "court_jester")
 
 ADD_DISPLAY_NAMES = {
-    "henchman": "Hannah's Henchman",
+    "henchman": "Velvet's Henchman",
     "court_jester": "Court of Kitty's Jester",
 }
 
 ADD_SPAWN_ANNOUNCEMENTS = {
-    "henchman": "A **Hannah's Henchman** crashes the raid!",
+    "henchman": "A **Velvet's Henchman** crashes the raid!",
     "court_jester": "A **Court of Kitty's Jester** leaps into the raid!",
 }
 

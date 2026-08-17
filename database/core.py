@@ -259,7 +259,7 @@ class Database(DatabaseWalletMixin, DatabaseInventoryMixin, DatabaseExpansionMix
         msg = (
             "Could not resolve any configured Postgres host. If DATABASE_URL uses an internal Railway "
             "hostname that is unavailable to this service, add DATABASE_PUBLIC_URL from the Postgres "
-            "service variables to the NuggetBot service."
+            "service variables to the GoonBot service."
         )
         raise RuntimeError(msg) from last_error
 
@@ -497,6 +497,28 @@ class Database(DatabaseWalletMixin, DatabaseInventoryMixin, DatabaseExpansionMix
         await self._migrate_tier1_retention()
         await self._migrate_loadout_preset_accessories()
         await self._migrate_gameplay_expansion()
+        await self._migrate_goonbot_age_gate()
+
+    async def _migrate_goonbot_age_gate(self) -> None:
+        """GoonBot 18+ age verification flag on users."""
+        col = "age_verified"
+        typedef = "INTEGER NOT NULL DEFAULT 0"
+        if self.is_postgres:
+            cursor = await self.conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ANY (current_schemas(true))
+                  AND table_name = 'users' AND column_name = ?
+                """,
+                (col,),
+            )
+            if await cursor.fetchone() is None:
+                await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
+        else:
+            cursor = await self.conn.execute("PRAGMA table_info(users)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            if col not in existing:
+                await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
 
     async def _migrate_tier1_retention(self) -> None:
         """Daily streaks, activity XP, trades, weekly stats, notification prefs."""
@@ -3225,6 +3247,32 @@ class Database(DatabaseWalletMixin, DatabaseInventoryMixin, DatabaseExpansionMix
     async def ensure_user(self, user_id: int, guild_id: int) -> None:
         async with self._write_lock:
             await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.commit()
+
+    async def get_age_verified(self, user_id: int, guild_id: int) -> bool:
+        await self.ensure_user(user_id, guild_id)
+        cursor = await self.conn.execute(
+            "SELECT age_verified FROM users WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        try:
+            return int(row["age_verified"]) >= 1
+        except (KeyError, IndexError, TypeError):
+            return False
+
+    async def set_age_verified(self, user_id: int, guild_id: int, verified: bool) -> None:
+        async with self._write_lock:
+            await self._ensure_user_no_lock(user_id, guild_id)
+            await self.conn.execute(
+                """
+                UPDATE users SET age_verified = ?
+                WHERE user_id = ? AND guild_id = ?
+                """,
+                (1 if verified else 0, user_id, guild_id),
+            )
             await self.conn.commit()
 
     async def ensure_users(self, user_ids: Iterable[int], guild_id: int) -> None:

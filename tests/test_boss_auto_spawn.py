@@ -79,7 +79,7 @@ class BossAutoSpawnTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_skips_when_boss_active(self) -> None:
-        await self.db.replace_boss(self.guild_id, "Hannah", "normal", 5000.0)
+        await self.db.replace_boss(self.guild_id, "Velvet Vixen", "normal", 5000.0)
         self.cog._send_boss_spawn_embed = AsyncMock()  # type: ignore[method-assign]
         spawned = await self.cog._try_auto_spawn_guild(self.guild)
         self.assertFalse(spawned)
@@ -125,7 +125,7 @@ class BossAutoSpawnTests(unittest.IsolatedAsyncioTestCase):
         past = time.time() - 3600
         await self.db.replace_boss(
             self.guild_id,
-            "Hannah",
+            "Velvet Vixen",
             "mythic",
             5000.0,
             spawned_at=past,

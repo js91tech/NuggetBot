@@ -123,7 +123,7 @@ def boss_variant_dashboard_label(variant: str) -> str:
     }
     if variant in special:
         return special[variant]
-    return f"Hannah ({variant.title()})"
+    return f"{config.BOSS_DISPLAY_NAME} ({variant.title()})"
 
 
 def dashboard_boss_variants() -> list[tuple[str, str]]:

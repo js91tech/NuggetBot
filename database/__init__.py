@@ -1,4 +1,4 @@
-"""NuggetBot database layer."""
+"""GoonBot database layer."""
 from database.core import Database, PostgresConnection, PostgresCursor
 from database.types import DailyClaimResult, WalletPanelData
 

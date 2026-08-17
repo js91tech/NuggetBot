@@ -4,9 +4,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.contracts import CONTRACT_MAP, format_contract_reward
 from utils.expansion_events import ensure_guild_contracts
 from utils.helpers import fmt_amount, guild_only_message
+from utils.meta_hub_ui import send_contracts_hub
 
 
 class Contracts(commands.Cog):
@@ -36,30 +36,7 @@ class Contracts(commands.Cog):
         await ensure_guild_contracts(self.bot.db, gid)
 
         if action == "list":
-            active = await self.bot.db.list_guild_contract_ids(gid)
-            progress_rows = {
-                str(r["contract_id"]): r
-                for r in await self.bot.db.get_contract_progress_rows(uid, gid)
-            }
-            lines = []
-            for cid in active:
-                defn = CONTRACT_MAP.get(cid)
-                if defn is None:
-                    continue
-                row = progress_rows.get(cid)
-                prog = int(row["progress"]) if row else 0
-                claimed = bool(int(row["claimed"])) if row else False
-                status = "✅ Claimed" if claimed else f"{prog}/{defn.target}"
-                lines.append(
-                    f"**{defn.name}** (`{cid}`) — {status}\n"
-                    f"_{defn.description}_\nReward: {format_contract_reward(defn)}"
-                )
-            refresh = await self.bot.db.get_contract_refresh_at(gid)
-            await interaction.response.send_message(
-                "**Contract Board**\n"
-                f"Refreshes <t:{int(refresh)}:R>\n\n" + ("\n\n".join(lines) if lines else "No contracts."),
-                ephemeral=True,
-            )
+            await send_contracts_hub(interaction, self)
             return
 
         if action == "claim":

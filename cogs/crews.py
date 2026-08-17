@@ -377,7 +377,7 @@ class Crews(commands.Cog):
                     err = await self.bot.db.deposit_crew_treasury(uid, guild_id, value)
                     msgs = {
                         "not_in_crew": "Join a crew first.",
-                        "insufficient_funds": "Not enough nuggets.",
+                        "insufficient_funds": "Not enough goonbux.",
                         "invalid_amount": "Enter a positive amount.",
                         "treasury_error": "Could not update crew treasury. Try again.",
                     }
@@ -415,7 +415,7 @@ class Crews(commands.Cog):
                         "active_loan": "You already have a crew loan. Repay it first.",
                         "amount_too_low": f"Minimum loan is {fmt_amount(config.CREW_LOAN_MIN_AMOUNT)}.",
                         "amount_too_high": "Loan exceeds your crew limit or treasury.",
-                        "insufficient_treasury": "Crew treasury does not have enough nuggets.",
+                        "insufficient_treasury": "Crew treasury does not have enough goonbux.",
                         "no_treasury": "Crew treasury is missing — rejoin or ask an admin.",
                         "invalid_amount": "Enter a positive amount.",
                     }
@@ -430,7 +430,7 @@ class Crews(commands.Cog):
                     err = await self.bot.db.repay_crew_loan(uid, guild_id, value)
                     msgs = {
                         "no_loan": "You have no active crew loan.",
-                        "insufficient_funds": "Not enough nuggets in your wallet.",
+                        "insufficient_funds": "Not enough goonbux in your wallet.",
                         "invalid_amount": "Enter a positive amount.",
                     }
                     if err:

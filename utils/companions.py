@@ -30,10 +30,10 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
     "hench_scrap_gnome": CompanionDefinition(
         "hench_scrap_gnome",
         "Scrap Gnome",
-        "Hannah's henchmen drop extra scrap in your pockets.",
+        "Velvet Vixen's henchmen drop extra scrap in your pockets.",
         "scrap",
         "🧌",
-        "Hannah's Henchmen",
+        "Velvet's Henchmen",
     ),
     "hench_jester_imp": CompanionDefinition(
         "hench_jester_imp",

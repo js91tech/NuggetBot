@@ -39,7 +39,7 @@ class DashboardSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(snapshots), 1)
         self.assertEqual(snapshots[0]["id"], self.guild_id)
         html = self.server._dashboard_page(snapshots)
-        self.assertIn("NuggetBot Control Room", html)
+        self.assertIn("GoonBot Control Room", html)
         self.assertIn('value="freaky_nikki"', html)
         self.assertIn("Freaky Nikki", html)
         self.assertIn("Reset all attribute stats", html)

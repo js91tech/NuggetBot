@@ -9,6 +9,7 @@ from discord.ext import commands
 import config
 from items import BOSS_ACCESSORY_POOL, get_item
 from utils.combat_engine import AttackContext, max_hp_from_armor, roll_player_damage
+from utils.dungeon_lobby_ui import send_dungeon_lobby
 from utils.dungeon_tiers import (
     DUNGEON_TIERS,
     NORMAL_TIER,
@@ -22,9 +23,9 @@ from utils.dungeon_tiers import (
 )
 from utils.dungeon_ui import DungeonActionResult, send_dungeon_panel
 from utils.energy import format_energy_display
+from utils.expansion_loot import on_dungeon_clear
 from utils.helpers import fmt_amount, guild_only_message
 from utils.quests import record_quest_event
-from utils.expansion_loot import on_dungeon_clear
 from utils.stats import hp_bar
 
 
@@ -618,7 +619,11 @@ class Dungeon(commands.Cog):
         uid = interaction.user.id
 
         if action is None:
-            await send_dungeon_panel(interaction, self)
+            run = await self.bot.db.get_dungeon_run(uid, guild_id)
+            if run is None:
+                await send_dungeon_lobby(interaction, self)
+            else:
+                await send_dungeon_panel(interaction, self)
             return
 
         if action == "party-create":

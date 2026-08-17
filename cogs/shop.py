@@ -489,6 +489,13 @@ class Shop(commands.Cog):
             return
         target = user or interaction.user
         guild_id = interaction.guild_id
+
+        if target.id == interaction.user.id:
+            from utils.gear_hub_ui import send_gear_hub
+
+            await send_gear_hub(self, interaction)
+            return
+
         await interaction.response.defer(ephemeral=True)
 
         (

@@ -63,11 +63,11 @@ class Imposter(commands.Cog):
         index = random.choice(replaceable)
         replacement = await self._ai_replacement(words[index].strip(".,!?;:"))
         if not replacement:
-            replacement = "nugget"
+            replacement = "goon"
 
         replacement = replacement.split()[0].strip("`\"'.,!?;:")[:32]
         if not replacement:
-            replacement = "nugget"
+            replacement = "goon"
 
         words[index] = self._preserve_edge_punctuation(words[index], replacement)
         return " ".join(words)
@@ -127,9 +127,9 @@ class Imposter(commands.Cog):
 
     async def _get_webhook(self, channel: discord.TextChannel) -> discord.Webhook:
         for webhook in await channel.webhooks():
-            if webhook.user == self.bot.user and webhook.name == "NuggetBot Imposter":
+            if webhook.user == self.bot.user and webhook.name == "GoonBot Imposter":
                 return webhook
-        return await channel.create_webhook(name="NuggetBot Imposter")
+        return await channel.create_webhook(name="GoonBot Imposter")
 
 
 async def setup(bot: commands.Bot) -> None:

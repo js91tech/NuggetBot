@@ -9,7 +9,8 @@ from utils.game_guide import (
     build_guide_embed,
     guide_section_options,
 )
-from utils.help_content import HELP_PAGES
+from utils.goon_theme import brand_color
+from utils.help_content import HELP_PAGES, NSFW_NOTICE
 from utils.helpers import guild_only_message
 
 
@@ -25,10 +26,11 @@ class HelpView(discord.ui.View):
 
     def embed(self) -> discord.Embed:
         title, body = HELP_PAGES[self.page]
+        description = body if self.page > 0 else f"{NSFW_NOTICE}\n\n{body}"
         return discord.Embed(
-            title=f"NuggetBot guide — {title}",
-            description=body,
-            color=discord.Color.blurple(),
+            title=f"GoonBot guide — {title}",
+            description=description,
+            color=brand_color(),
         ).set_footer(text=f"Page {self.page + 1}/{len(HELP_PAGES)} · /guide for full systems + items")
 
     @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
@@ -122,7 +124,7 @@ class Help(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="help", description="Browse NuggetBot commands by category.")
+    @app_commands.command(name="help", description="Browse GoonBot commands by category.")
     @app_commands.guild_only()
     async def help_cmd(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:

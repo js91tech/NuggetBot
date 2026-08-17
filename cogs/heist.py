@@ -13,9 +13,10 @@ from items import get_item
 from utils.achievements import evaluate_unlocks, format_unlock_message
 from utils.bank_heist_ui import send_bank_heist_panel
 from utils.bodyguards import bodyguard_defeat_chance, format_bodyguard_roster, power_from_loadout
-from utils.crew_banking import heist_same_crew_bonus
-from utils.gear_sets import heist_intimidation_bonus
 from utils.bot_players import pvp_target_error
+from utils.crew_banking import heist_same_crew_bonus
+from utils.crime_hub_ui import send_crime_hub
+from utils.gear_sets import heist_intimidation_bonus
 from utils.helpers import fmt_amount, guild_only_message
 from utils.loadout import parse_loadout
 
@@ -32,18 +33,29 @@ class Heist(commands.Cog):
         self.bot = bot
         self.pending_arrests: dict[tuple[int, int], tuple[int, float]] = {}
 
-    @app_commands.command(name="heist", description="Attempt to rob a user.")
-    @app_commands.describe(target="Robbery target", crew1="Optional crew member", crew2="Optional crew member")
+    @app_commands.command(
+        name="heist",
+        description="Attempt to rob a user, or leave target blank to open the Crime Hub.",
+    )
+    @app_commands.describe(
+        target="Robbery target (leave blank to open the Crime Hub)",
+        crew1="Optional crew member",
+        crew2="Optional crew member",
+    )
     @app_commands.guild_only()
     async def heist(
         self,
         interaction: discord.Interaction,
-        target: discord.Member,
+        target: discord.Member | None = None,
         crew1: discord.Member | None = None,
         crew2: discord.Member | None = None,
     ) -> None:
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+
+        if target is None:
+            await send_crime_hub(self, interaction)
             return
 
         participants = [interaction.user]
@@ -89,7 +101,9 @@ class Heist(commands.Cog):
 
         target_balance = await self.bot.db.get_balance(target.id, interaction.guild_id)
         if target_balance <= 0:
-            await interaction.response.send_message("That user has no nuggets to steal.", ephemeral=True)
+            await interaction.response.send_message(
+                f"That user has no {config.CURRENCY_NAME} to steal.", ephemeral=True,
+            )
             return
 
         await interaction.response.defer()

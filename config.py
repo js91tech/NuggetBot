@@ -13,10 +13,10 @@ load_dotenv()
 def _default_database_path() -> str:
     volume_path = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
     if volume_path:
-        return str(Path(volume_path) / "nuggetbot.sqlite3")
+        return str(Path(volume_path) / "goonbot.sqlite3")
     if Path("/data").exists():
-        return "/data/nuggetbot.sqlite3"
-    return "nuggetbot.sqlite3"
+        return "/data/goonbot.sqlite3"
+    return "goonbot.sqlite3"
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -48,10 +48,11 @@ DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").strip().lower() not i
 DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")
 DASHBOARD_PORT = int(os.getenv("PORT") or os.getenv("DASHBOARD_PORT", "8080"))
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
-DASHBOARD_COOKIE_NAME = "nuggetbot_dashboard"
+DASHBOARD_COOKIE_NAME = "goonbot_dashboard"
 
-CURRENCY_NAME = "nuggets"
-CURRENCY_EMOJI = "🍘"
+BOT_DISPLAY_NAME = "GoonBot"
+CURRENCY_NAME = "goonbux"
+CURRENCY_EMOJI = "💋"
 
 PASSIVE_CHAT_REWARD = 0.5
 PASSIVE_ACTIVE_BONUS = 15.0
@@ -147,7 +148,7 @@ PICK_KEY_ESCAPE_CHANCE = 0.15
 ALLOW_BOT_PLAYERS = True
 ALLOW_BOT_PASSIVE_INCOME = False
 
-HACK_VIRUS_NAME = "hannah hentai hanta virus"
+HACK_VIRUS_NAME = "velvet vixen love virus"
 HACK_BASE_PENALTY = 15.0
 HACK_PASS_PENALTY = 2.0
 HACK_TRANSFER_SECONDS = 60
@@ -431,8 +432,9 @@ FREAKY_NIKKI_CONSUMABLE_QTY_RANGE = (1, 2)
 # Optional hotlinked moment art (moment key -> URL). Local files in assets/bosses/freaky_nikki/ take precedence when unset.
 FREAKY_NIKKI_ART_URLS: dict[str, str] = {}
 BOSS_AUTO_SPAWN_TOMASS_CHANCE = 0.03
+BOSS_DISPLAY_NAME = "Velvet Vixen"
 HANNAH_SPAWN_VARIANTS: tuple[str, ...] = ("normal", "enraged", "shadow", "celestial", "mythic")
-# Dashboard summon dropdown — special bosses first, then Hannah tiers.
+# Dashboard summon dropdown — special bosses first, then Velvet Vixen tiers.
 BOSS_DASHBOARD_VARIANT_ORDER: tuple[str, ...] = (
     "world_leviathan",
     "freaky_nikki",
@@ -1026,6 +1028,12 @@ class LiveSetting:
 
 
 LIVE_SETTINGS: dict[str, LiveSetting] = {
+    "nsfw_channel_only": LiveSetting(
+        1.0,
+        "Require Discord NSFW channels for commands (1=on, 0=off)",
+        maximum=1.0,
+        integer=True,
+    ),
     "passive_chat_reward": LiveSetting(PASSIVE_CHAT_REWARD, "Per-message earning"),
     "passive_active_bonus": LiveSetting(PASSIVE_ACTIVE_BONUS, "Per active hour earning"),
     "voice_chat_reward": LiveSetting(VOICE_CHAT_REWARD, "Per minute in VC"),

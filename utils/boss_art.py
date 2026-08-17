@@ -9,7 +9,7 @@ import config
 ASSETS_ROOT = Path(__file__).resolve().parent.parent / "assets" / "bosses"
 FREAKY_NIKKI_ASSETS = ASSETS_ROOT / "freaky_nikki"
 
-# Hannah tiers share art keyed by variant; TomAss and ZZ's Wrath have dedicated portraits.
+# Velvet Vixen tiers share art keyed by variant; TomAss and ZZ's Wrath have dedicated portraits.
 VARIANT_ART_FILES: dict[str, str] = {
     "normal": "hannah_normal.png",
     "enraged": "hannah_enraged.png",

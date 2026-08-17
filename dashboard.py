@@ -523,7 +523,7 @@ class DashboardServer:
     @staticmethod
     def _session_value() -> str:
         secret = config.DASHBOARD_TOKEN.strip()
-        return hashlib.sha256(f"nuggetbot-dashboard:{secret}".encode()).hexdigest()
+        return hashlib.sha256(f"goonbot-dashboard:{secret}".encode()).hexdigest()
 
     async def _snapshots(self) -> list[dict[str, Any]]:
         snapshots = []
@@ -676,10 +676,10 @@ class DashboardServer:
     def _login_page(self, error: str = "") -> str:
         error_markup = f"<p class='error'>{html.escape(error)}</p>" if error else ""
         return self._page_shell(
-            "NuggetBot Dashboard Login",
+            "GoonBot Dashboard Login",
             f"""
             <main class="login-card">
-              <div class="badge">NuggetBot</div>
+              <div class="badge">GoonBot</div>
               <h1>Dashboard Login</h1>
               <p>Enter your <code>DASHBOARD_TOKEN</code> to view server stats.</p>
               {error_markup}
@@ -693,7 +693,7 @@ class DashboardServer:
 
     def _disabled_page(self) -> str:
         return self._page_shell(
-            "NuggetBot Dashboard Disabled",
+            "GoonBot Dashboard Disabled",
             """
             <main class="login-card">
               <div class="badge">Setup needed</div>
@@ -711,12 +711,12 @@ class DashboardServer:
         active_viruses = sum(1 for item in snapshots if item["virus"] is not None)
         cards = "\n".join(self._guild_card(item) for item in snapshots) or self._empty_state()
         return self._page_shell(
-            "NuggetBot Dashboard",
+            "GoonBot Dashboard",
             f"""
             <header class="hero">
               <div>
                 <div class="badge">Live Dashboard</div>
-                <h1>NuggetBot Control Room</h1>
+                <h1>GoonBot Control Room</h1>
                 <p>Railway-friendly status dashboard served by the bot itself.</p>
               </div>
               <form method="post" action="/logout"><button class="ghost" type="submit">Logout</button></form>

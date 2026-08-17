@@ -5,7 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.helpers import guild_only_message
-from utils.relics import relic_by_id
+from utils.relics_hub_ui import send_relics_hub
 
 
 class Relics(commands.Cog):
@@ -23,27 +23,7 @@ class Relics(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        rows = await self.bot.db.list_relic_instances(interaction.user.id, interaction.guild_id)
-        equipped = await self.bot.db.get_equipped_relic_row(
-            interaction.user.id, interaction.guild_id,
-        )
-        eq_id = int(equipped["instance_id"]) if equipped else None
-        if not rows:
-            await interaction.response.send_message(
-                "No relics yet. Mythic bosses, vault clears, and expeditions can drop them.",
-                ephemeral=True,
-            )
-            return
-        lines = []
-        for row in rows:
-            defn = relic_by_id(str(row["relic_id"]))
-            if defn is None:
-                continue
-            mark = " **(equipped)**" if eq_id == int(row["instance_id"]) else ""
-            lines.append(
-                f"{defn.emoji} **{defn.name}** (#{row['instance_id']}){mark}\n_{defn.description}_"
-            )
-        await interaction.response.send_message("\n\n".join(lines), ephemeral=True)
+        await send_relics_hub(self, interaction)
 
     @relics_group.command(name="equip", description="Equip a relic by instance id.")
     @app_commands.describe(instance_id="Relic instance id from /relics list")

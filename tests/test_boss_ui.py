@@ -24,7 +24,7 @@ class BossFightEmbedTests(unittest.IsolatedAsyncioTestCase):
         self.cog.auto_spawn.cancel()
         self.cog.passive_boss_decay_tick.cancel()
         self.guild_id = 9001
-        await self.db.replace_boss(self.guild_id, "Hannah", "normal", 5000.0)
+        await self.db.replace_boss(self.guild_id, "Velvet Vixen", "normal", 5000.0)
 
     async def asyncTearDown(self) -> None:
         await self.db.close()
@@ -34,7 +34,7 @@ class BossFightEmbedTests(unittest.IsolatedAsyncioTestCase):
         embed, err = await self.cog.build_boss_fight_embed(self.guild_id)
         self.assertIsNone(err)
         assert embed is not None
-        self.assertIn("Hannah", embed.title)
+        self.assertIn("Velvet Vixen", embed.title)
         hp_field = next(f for f in embed.fields if f.name == "HP")
         self.assertIn("5000", hp_field.value.replace(",", ""))
 

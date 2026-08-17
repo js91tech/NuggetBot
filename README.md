@@ -1,6 +1,9 @@
-# NuggetBot
+# GoonBot
 
-A chaos-driven Discord economy bot built with **discord.py** and PostgreSQL or SQLite.
+> **Adult 18+ fork of NuggetBot.** See **[GOONBOT.md](GOONBOT.md)** for deploy, age/NSFW gates, and hub menus.
+> **Do not merge this branch into a child-friendly NuggetBot production `main`.**
+
+A chaos-driven Discord economy RPG built with **discord.py** and PostgreSQL or SQLite — rethemed for explicit adult play (currency **goonbux**, boss **Velvet Vixen**, interactive hubs everywhere).
 
 ## Features
 
@@ -10,17 +13,19 @@ A chaos-driven Discord economy bot built with **discord.py** and PostgreSQL or S
 | 2 | **The Hit** | Bounty system: place bounties with trigger words, claim when targets slip up |
 | 3 | **The Steal** | Heist & crew system: rob users, form crews, arrest failed thieves |
 | 4 | **The Virus** | Hot potato: infect users, give every holder a timer, scaling penalties |
-| 5 | **The Boss** | Boss raids: fight Hannah variants, scale HP with economy, down/heal mechanics |
+| 5 | **The Boss** | Boss raids: fight Velvet Vixen variants, scale HP with economy, down/heal mechanics |
 | 6 | **The AI** | Imposter webhook word sabotage + Lore Roulette trivia |
+| 7 | **Hubs** | Discord Views for profile, gear, jobs, character, casino, crime, and more |
 
 ## Quick Start
 
 ### 1. Prerequisites
 
 - Python 3.11+
-- A Discord bot token
+- A Discord bot token (**new app for GoonBot** — do not reuse NuggetBot’s)
 - Message Content intent enabled in the Discord Developer Portal
 - Optional: an OpenAI-compatible API key for the Imposter module
+- Servers/channels marked **NSFW**; players must pass the 18+ gate
 
 ### 2. Install
 

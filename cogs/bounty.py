@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.bot_players import pvp_target_error, skip_gameplay_bot
+from utils.crime_hub_ui import CrimeHubView
 from utils.helpers import (
     contains_word,
     fmt_amount,
@@ -108,7 +109,7 @@ class Bounty(commands.Cog):
 
     @app_commands.command(
         name="bounty-board",
-        description="Post a public embed of all active bounties in this channel.",
+        description="Post a public Crime Hub embed of all active bounties in this channel.",
     )
     @app_commands.guild_only()
     async def bounty_board(self, interaction: discord.Interaction) -> None:
@@ -136,7 +137,10 @@ class Bounty(commands.Cog):
                 )
             embed.description = "\n\n".join(lines)
         embed.set_footer(text="Say the trigger word after the target slips up to claim")
-        await interaction.response.send_message(embed=embed)
+        # Attach the full Crime Hub (pocket heist, bank heist, bounties, arrests) so
+        # anyone in the channel can jump straight into a hustle from this post.
+        view = CrimeHubView(self, interaction.guild.id)
+        await interaction.response.send_message(embed=embed, view=view)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from items import get_item
 from utils.alchemy import RECIPE_MAP, RECIPES, recipe_available
+from utils.alchemy_hub_ui import send_alchemy_hub
 from utils.helpers import fmt_amount, guild_only_message
 
 
@@ -41,33 +42,8 @@ class Alchemy(commands.Cog):
         guild_id = interaction.guild_id
         uid = interaction.user.id
 
-        blueprints = {
-            str(r["blueprint_id"])
-            for r in await self.bot.db.list_blueprints(uid, guild_id)
-        }
-
         if action == "list":
-            lines = []
-            scrap_qty = await self._material_qty(uid, guild_id, "alchemy_scrap")
-            for r in RECIPES:
-                locked = not recipe_available(r, blueprints)
-                status = "🔒" if locked else "✅"
-                extra = []
-                if r.essence_cost:
-                    extra.append(f"{r.essence_cost} essence")
-                if r.resin_cost:
-                    extra.append(f"{r.resin_cost} resin")
-                if r.waste_cost:
-                    extra.append(f"{r.waste_cost} waste")
-                extra_txt = f" + {', '.join(extra)}" if extra else ""
-                lines.append(
-                    f"{status} **{r.name}** (`{r.recipe_id}`) — {r.scrap_cost} scrap + "
-                    f"{fmt_amount(r.nugget_cost)}{extra_txt} → `{r.output_item_id}`\n_{r.description}_"
-                )
-            await interaction.response.send_message(
-                f"You have **{scrap_qty}** alchemy scrap.\n\n" + "\n\n".join(lines),
-                ephemeral=True,
-            )
+            await send_alchemy_hub(self, interaction)
             return
 
         if action == "craft":
@@ -75,6 +51,10 @@ class Alchemy(commands.Cog):
                 await interaction.response.send_message("Pick a recipe.", ephemeral=True)
                 return
             r = RECIPE_MAP[recipe]
+            blueprints = {
+                str(row["blueprint_id"])
+                for row in await self.bot.db.list_blueprints(uid, guild_id)
+            }
             if not recipe_available(r, blueprints):
                 await interaction.response.send_message(
                     "Blueprint not unlocked. Check `/codex`.", ephemeral=True,

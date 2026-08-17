@@ -116,7 +116,7 @@ class CoinflipAcceptView(discord.ui.View):
 
             if not await self.cog.bot.db.debit_wallet(challenger, guild_id, amount):
                 await interaction.response.edit_message(
-                    content="Duel cancelled — challenger no longer has enough nuggets.",
+                    content="Duel cancelled — challenger no longer has enough goonbux.",
                     view=self,
                 )
                 self.stop()
@@ -124,7 +124,7 @@ class CoinflipAcceptView(discord.ui.View):
             if not await self.cog.bot.db.debit_wallet(opponent, guild_id, amount):
                 await self.cog.bot.db.credit_wallet(challenger, guild_id, amount)
                 await interaction.response.edit_message(
-                    content="Duel cancelled — you no longer have enough nuggets.",
+                    content="Duel cancelled — you no longer have enough goonbux.",
                     view=self,
                 )
                 self.stop()
@@ -295,16 +295,23 @@ class Gambling(commands.Cog):
             return None
         return amount
 
-    @app_commands.command(name="coinflip", description="50/50 coinflip vs the house for nuggets.")
+    @app_commands.command(
+        name="coinflip",
+        description="50/50 coinflip vs the house for goonbux. Try /casino for the full hub.",
+    )
     @app_commands.describe(amount="Nuggets to wager")
     @app_commands.guild_only()
     async def coinflip(self, interaction: discord.Interaction, amount: float) -> None:
+        await self.play_coinflip_vs_house(interaction, amount)
+
+    async def play_coinflip_vs_house(self, interaction: discord.Interaction, amount: float) -> None:
+        """House coinflip — shared by /coinflip and the Casino Hub modal."""
         bet = await self._validate_bet(interaction, amount)
         if bet is None or interaction.guild_id is None:
             return
 
         if not await self.bot.db.debit_wallet(interaction.user.id, interaction.guild_id, bet):
-            await interaction.response.send_message("Insufficient nuggets.", ephemeral=True)
+            await interaction.response.send_message("Insufficient goonbux.", ephemeral=True)
             return
 
         tax = await self.bot.db.get_config_value(interaction.guild_id, "gambling_house_tax")
@@ -332,7 +339,7 @@ class Gambling(commands.Cog):
 
     @app_commands.command(
         name="coinflip-duel",
-        description="Challenge another player to a coinflip for nuggets.",
+        description="Challenge another player to a coinflip for goonbux.",
     )
     @app_commands.describe(opponent="Player to challenge", amount="Nuggets each player stakes")
     @app_commands.guild_only()
@@ -385,7 +392,7 @@ class Gambling(commands.Cog):
             return
 
         if not await self.bot.db.debit_wallet(interaction.user.id, interaction.guild_id, bet):
-            await interaction.response.send_message("Insufficient nuggets.", ephemeral=True)
+            await interaction.response.send_message("Insufficient goonbux.", ephemeral=True)
             return
 
         tax = await self.bot.db.get_config_value(interaction.guild_id, "gambling_house_tax")
@@ -426,10 +433,17 @@ class Gambling(commands.Cog):
         embed = view._embed(reveal_dealer=False)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name="slots", description="Spin the nugget slots (3-reel).")
+    @app_commands.command(
+        name="slots",
+        description="Spin the goonbux slots (3-reel). Try /casino for the full hub.",
+    )
     @app_commands.describe(amount="Nuggets to wager")
     @app_commands.guild_only()
     async def slots(self, interaction: discord.Interaction, amount: float) -> None:
+        await self.play_slots_vs_house(interaction, amount)
+
+    async def play_slots_vs_house(self, interaction: discord.Interaction, amount: float) -> None:
+        """House slots spin — shared by /slots and the Casino Hub modal."""
         bet = await self._validate_bet(interaction, amount)
         if bet is None or interaction.guild_id is None:
             return
@@ -440,7 +454,7 @@ class Gambling(commands.Cog):
             )
             return
         if not await self.bot.db.debit_wallet(interaction.user.id, interaction.guild_id, bet):
-            await interaction.response.send_message("Insufficient nuggets.", ephemeral=True)
+            await interaction.response.send_message("Insufficient goonbux.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -497,13 +511,30 @@ class Gambling(commands.Cog):
         if interaction.guild_id is None:
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
-        pool = await self.bot.db.get_jackpot_pool(interaction.guild_id)
         await interaction.response.send_message(
+            await self.jackpot_status_text(interaction.guild_id), ephemeral=True,
+        )
+
+    async def jackpot_status_text(self, guild_id: int) -> str:
+        pool = await self.bot.db.get_jackpot_pool(guild_id)
+        return (
             f"Server jackpot: **{fmt_amount(pool)}**\n"
             f"A sliver of casino winnings feeds the pool. **/slots** can hit it "
-            f"({config.JACKPOT_WIN_CHANCE_SLOTS * 100:.2f}% chance per spin).",
-            ephemeral=True,
+            f"({config.JACKPOT_WIN_CHANCE_SLOTS * 100:.2f}% chance per spin)."
         )
+
+    @app_commands.command(
+        name="casino",
+        description="Open the Casino Hub — coinflip, slots, jackpot, and blackjack in one panel.",
+    )
+    @app_commands.guild_only()
+    async def casino(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None:
+            await interaction.response.send_message(guild_only_message(), ephemeral=True)
+            return
+        from utils.casino_hub_ui import send_casino_hub
+
+        await send_casino_hub(self, interaction)
 
 
 async def setup(bot: commands.Bot) -> None:

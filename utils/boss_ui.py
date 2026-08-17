@@ -15,6 +15,7 @@ from utils.consumables_ui import (
     list_boss_useable_entries,
     use_error_message,
 )
+from utils.goon_theme import accent_color
 from utils.skills import skills_for_class
 from utils.spell_cast import cast_skill_for_user
 
@@ -261,7 +262,7 @@ class BossFightView(discord.ui.View):
         embed = discord.Embed(
             title="Raid damage leaderboard",
             description="\n".join(lines),
-            color=discord.Color.gold(),
+            color=accent_color(),
         )
         embed.set_footer(text="Rewards scale with damage share when the boss falls")
         await interaction.response.send_message(embed=embed, ephemeral=True)

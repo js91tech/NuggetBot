@@ -7,6 +7,7 @@ from discord.ext import commands
 import config
 from utils.aspects import random_aspect_definition, roll_pct_shop
 from utils.helpers import guild_only_message
+from utils.meta_hub_ui import send_season_hub
 
 
 class Season(commands.Cog):
@@ -54,22 +55,11 @@ class Season(commands.Cog):
             )
             return
 
-        season_num, last_reset = await self.bot.db.get_elo_season(guild_id)
-        tokens = await self.bot.db.get_season_tokens(uid, guild_id, season_num)
-
         if action == "shop":
-            lines = []
-            for rid, (cost, kind) in config.SEASON_TOKEN_SHOP.items():
-                redeemed = await self.bot.db.has_season_redemption(uid, guild_id, season_num, rid)
-                mark = "✅" if redeemed else f"{cost} tokens"
-                lines.append(f"**{rid}** ({kind}) — {mark}")
-            await interaction.response.send_message(
-                f"**Season {season_num} Shop** · You have **{tokens}** tokens\n\n"
-                + "\n".join(lines)
-                + "\n\nRedeem with `/season` → **Redeem**.",
-                ephemeral=True,
-            )
+            await send_season_hub(interaction, self, mode="shop")
             return
+
+        season_num, _last_reset = await self.bot.db.get_elo_season(guild_id)
 
         if action == "redeem":
             if not reward or reward not in config.SEASON_TOKEN_SHOP:
@@ -104,15 +94,7 @@ class Season(commands.Cog):
                 )
             return
 
-        rating, wins, losses = await self.bot.db.get_duel_elo(uid, guild_id)
-        reset_text = "Never" if last_reset <= 0 else f"<t:{int(last_reset)}:R>"
-        await interaction.response.send_message(
-            f"**Season {season_num}** · Last reset: {reset_text}\n"
-            f"Your ELO: **{rating}** ({wins}W / {losses}L)\n"
-            f"Season tokens: **{tokens}** · `/season` → **Shop** to spend\n"
-            f"Admins can run `/season` → **Reset ELO** to start a new ranked season.",
-            ephemeral=True,
-        )
+        await send_season_hub(interaction, self, mode="status")
 
 
 async def setup(bot: commands.Bot) -> None:

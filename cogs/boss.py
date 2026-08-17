@@ -101,7 +101,7 @@ from utils.summoner_penalty import (
     summoner_penalty_summary,
 )
 
-BOSS_NAME = "Hannah"
+BOSS_NAME = config.BOSS_DISPLAY_NAME
 BOSS_NAME_TOMASS = config.BOSS_NAME_TOMASS
 BOSS_NAME_ZZ = config.BOSS_NAME_ZZ_WRATH
 BOSS_NAME_FREAKY_NIKKI = config.BOSS_NAME_FREAKY_NIKKI
@@ -522,7 +522,7 @@ class Boss(commands.Cog):
             return
         embed = discord.Embed(
             title=f"{name} retreated!",
-            description="Time ran out—no nuggets or gear were awarded.",
+            description="Time ran out—no goonbux or gear were awarded.",
             color=discord.Color.dark_grey(),
         )
         art = attach_boss_art(embed, variant)
@@ -693,7 +693,7 @@ class Boss(commands.Cog):
             self._clear_raid_state(guild_id)
             summary = (
                 f"{BOSS_NAME} collapsed from exhaustion with **no recorded strikes**. "
-                "No nuggets or gear were awarded."
+                "No goonbux or gear were awarded."
             )
             await self._send_boss_defeat_embed(
                 guild,
@@ -1193,7 +1193,7 @@ class Boss(commands.Cog):
     @app_commands.describe(boss="Boss to summon")
     @app_commands.choices(
         boss=[
-            app_commands.Choice(name="Hannah (enraged)", value="hannah_enraged"),
+            app_commands.Choice(name="Velvet Vixen (enraged)", value="hannah_enraged"),
             app_commands.Choice(name="TomAss (enraged mirror ×1.75)", value="tomass"),
             app_commands.Choice(name="Freaky Nikki", value="freaky_nikki"),
         ],
@@ -1218,7 +1218,7 @@ class Boss(commands.Cog):
         ):
             await interaction.followup.send(
                 f"Summoning costs **{fmt_amount(config.SUMMON_COST)}**. "
-                "You do not have enough nuggets.",
+                "You do not have enough goonbux.",
             )
             return
 

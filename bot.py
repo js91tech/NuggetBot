@@ -58,7 +58,7 @@ COGS = (
 )
 
 
-class NuggetBot(commands.Bot):
+class GoonBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -74,6 +74,12 @@ class NuggetBot(commands.Bot):
         self.dashboard = DashboardServer(self)
         self.outbound_gate = OutboundGate(config.DISCORD_OUTBOUND_MIN_INTERVAL_SEC)
         self._launch_jobs_started = False
+        self.tree.interaction_check = self._age_nsfw_check
+
+    async def _age_nsfw_check(self, interaction: discord.Interaction) -> bool:
+        from utils.age_gate import check_interaction
+
+        return await check_interaction(interaction, self.db)
 
     async def setup_hook(self) -> None:
         await self.db.connect()
@@ -178,7 +184,7 @@ async def main() -> None:
     attempt = 0
     while True:
         try:
-            async with NuggetBot() as bot:
+            async with GoonBot() as bot:
                 await bot.start(token)
             return
         except discord.HTTPException as exc:

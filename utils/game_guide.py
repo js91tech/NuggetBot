@@ -1,4 +1,4 @@
-"""NuggetBot game guide — sections and item catalogs for /guide UI."""
+"""GoonBot game guide — sections and item catalogs for /guide UI."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -171,10 +171,12 @@ def _build_sections() -> tuple[GuideSection, ...]:
             pages=_static_pages(
                 "Getting started",
                 [
-                    "**NuggetBot** is a Discord economy RPG. Earn **nuggets**, gear up, raid bosses, "
+                    "🔞 **GoonBot is an 18+ adult economy RPG.** Play in NSFW channels when your "
+                    "server requires it.",
+                    "**GoonBot** is a Discord economy RPG. Earn **goonbux**, gear up, raid bosses, "
                     "fight duels, run heists, and climb prestige.",
                     "**First hour**\n"
-                    "1. `/daily` — free nuggets\n"
+                    "1. `/daily` — free goonbux\n"
                     "2. `/shop` — buy a weapon and armor\n"
                     "3. `/equip` — wear your gear\n"
                     "4. `/class choose` — pick Vanguard, Mogul, or Shade\n"
@@ -235,7 +237,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
             section_id="boss",
             label="Boss raids",
             emoji="👹",
-            description="Hannah fights, loot, and healing",
+            description="Velvet Vixen fights, loot, and healing",
             pages=_static_pages(
                 "Boss raids",
                 [
@@ -251,10 +253,10 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "· Weekly `/boss-hunt` targets + crew scoreboard via `/boss-crew-lb`\n"
                     "· `world_boss_week` event spawns the **World Leviathan** with unique loot\n"
                     "· Your weapon sets base damage (+ small roll); armor adds HP and mitigation\n"
-                    "· Hannah counters can down you — teammates `/heal` to revive\n"
+                    "· Velvet Vixen counters can down you — teammates `/heal` to revive\n"
                     "· Damage share when the boss falls; killing blow shows your avatar pose",
                     "**Raid adds** (after boss drops below **50%** HP)\n"
-                    "· **Hannah's Henchman** — alchemy scrap (rare void hardener on celestial+ fights)\n"
+                    "· **Velvet's Henchman** — alchemy scrap (rare void hardener on celestial+ fights)\n"
                     "· **Court of Kitty's Jester** — void hardener (sometimes scrap)\n"
                     "· Use **Attack Add** on the `/boss` panel — adds never drop celestial shards",
                     "**Variants** (weakest → strongest)\n"
@@ -279,7 +281,7 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     f"· **Delver's Depths** — solo, **{config.DUNGEON_ENERGY_COST}** energy per run\n"
                     f"· **Gilded Vault** — unlock **{fmt_amount(config.DUNGEON_VAULT_UNLOCK_COST)}**, "
                     f"party of **{config.DUNGEON_VAULT_MIN_PARTY_SIZE}**+ raiders",
-                    "**Rewards** — room nuggets, clear bonus, **alchemy scrap** for `/alchemy` and **enhancement**\n"
+                    "**Rewards** — room goonbux, clear bonus, **alchemy scrap** for `/alchemy` and **enhancement**\n"
                     f"· Accessory drop chance on clear (~{int(config.DUNGEON_ACCESSORY_DROP_CHANCE * 100)}% standard, "
                     f"~{int(config.DUNGEON_VAULT_ACCESSORY_DROP_CHANCE * 100)}% vault)\n"
                     "· **Gilded Vault** full clear can also roll **void hardener**",
@@ -342,15 +344,15 @@ def _build_sections() -> tuple[GuideSection, ...]:
                     "**Per-instance enhancement** — levels stick to the gear piece, not the slot. "
                     "Swap weapons and your +levels travel with the item.",
                     "**Commands**\n"
-                    "`/enhance` — pick a gear instance; shows material, nugget cost, success %\n"
-                    "`/repair-gear` — fix **broken** gear (10% of base item shop price in nuggets)\n"
+                    "`/enhance` — pick a gear instance; shows material, goonbux cost, success %\n"
+                    "`/repair-gear` — fix **broken** gear (10% of base item shop price in goonbux)\n"
                     "`/equip-instance` — equip a specific instance by id (`/inventory` lists them)",
                     "**Level ladder**\n"
                     "· **+1 … +10** — alchemy scrap\n"
                     "· **+11 … +15** — void hardener\n"
                     "· **PRI → DUO → TRI → TET → PENTA** — celestial shard",
-                    "**Costs** — every attempt debits materials **and** nuggets (win or lose). "
-                    f"Nugget anchors: ~{fmt_amount(config.ENHANCE_NUGGET_COST_AT_PLUS_10)} at +10, "
+                    "**Costs** — every attempt debits materials **and** goonbux (win or lose). "
+                    f"Goonbux anchors: ~{fmt_amount(config.ENHANCE_NUGGET_COST_AT_PLUS_10)} at +10, "
                     f"~{fmt_amount(config.ENHANCE_NUGGET_COST_AT_PLUS_15)} at +15, "
                     f"~{fmt_amount(config.ENHANCE_NUGGET_COST_AT_PENTA)} at PENTA",
                     "**Failure rules**\n"

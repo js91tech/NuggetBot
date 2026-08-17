@@ -11,11 +11,10 @@ import config
 from utils.expeditions import (
     EXPEDITION_TEMPLATES,
     expedition_progress_pct,
-    format_expedition_status,
-    scale_expedition_goal,
 )
 from utils.expansion_events import record_expansion_event
 from utils.helpers import fmt_amount, guild_only_message
+from utils.meta_hub_ui import send_expeditions_hub
 from utils.relics import EXPEDITION_RELIC_DROP
 
 
@@ -88,6 +87,9 @@ class Expeditions(commands.Cog):
             await interaction.response.send_message(guild_only_message(), ephemeral=True)
             return
         gid = interaction.guild_id
+        if action == "status":
+            await send_expeditions_hub(interaction, self)
+            return
         active = await self.bot.db.get_active_expedition(gid)
         if active is None:
             await interaction.response.send_message(
@@ -99,18 +101,6 @@ class Expeditions(commands.Cog):
             (t for t in EXPEDITION_TEMPLATES if t.expedition_id == str(active["expedition_id"])),
             EXPEDITION_TEMPLATES[0],
         )
-        if action == "status":
-            text = format_expedition_status(
-                template,
-                int(active["contributed_scrap"]),
-                float(active["contributed_nuggets"]),
-                float(active["ends_at"]),
-            )
-            goal = scale_expedition_goal(template.goal_scrap, len(await self.bot.db.list_guild_user_ids(gid)))
-            await interaction.response.send_message(
-                text + f"\nScaled scrap goal: **{goal}**", ephemeral=True,
-            )
-            return
         if action == "contribute":
             s = max(0, scrap or 0)
             n = max(0.0, nuggets or 0.0)

@@ -41,7 +41,7 @@ async def run_launch_grant(bot: commands.Bot) -> None:
             granted += 1
 
     await bot.db.clear_boss(guild.id)
-    await bot.db.replace_boss(guild.id, "Hannah", "normal", 500.0)
+    await bot.db.replace_boss(guild.id, config.BOSS_DISPLAY_NAME, "normal", 500.0)
     await bot.db.mark_one_time_job_complete(config.LAUNCH_GRANT_JOB_ID)
     config.LAUNCH_GRANT_ENABLED = False
 
@@ -51,7 +51,7 @@ async def run_launch_grant(bot: commands.Bot) -> None:
             await channel.send(
                 "Launch gift delivered! Every human member received "
                 f"{int(config.LAUNCH_GRANT_AMOUNT)} nuggets, a Training Stick, and a Cardboard Shield. "
-                "Any old boss was cleared and a normal 500 HP Hannah has spawned.",
+                "Any old boss was cleared and a normal 500 HP Velvet Vixen has spawned.",
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:

@@ -99,7 +99,7 @@ class BossElementDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.init_schema()
         self.guild_id = 7001
         self.user_id = 99
-        await self.db.replace_boss(self.guild_id, "Hannah", "normal", 5000.0, element="frost")
+        await self.db.replace_boss(self.guild_id, "Velvet Vixen", "normal", 5000.0, element="frost")
 
     async def asyncTearDown(self) -> None:
         await self.db.close()
