@@ -81,8 +81,45 @@ class BossAutoSpawnTests(unittest.IsolatedAsyncioTestCase):
     async def test_skips_when_boss_active(self) -> None:
         await self.db.replace_boss(self.guild_id, "Hannah", "normal", 5000.0)
         self.cog._send_boss_spawn_embed = AsyncMock()  # type: ignore[method-assign]
-        await self.cog._try_auto_spawn_guild(self.guild)
+        spawned = await self.cog._try_auto_spawn_guild(self.guild)
+        self.assertFalse(spawned)
         self.cog._send_boss_spawn_embed.assert_not_called()
+
+    async def test_zero_hp_boss_blocks_spawn_and_finishes_async(self) -> None:
+        await self.db.replace_boss(self.guild_id, "Hannah", "normal", 5000.0)
+        await self.db.conn.execute(
+            "UPDATE boss_sessions SET hp = 0 WHERE guild_id = ?",
+            (self.guild_id,),
+        )
+        await self.db.conn.commit()
+        self.cog._send_boss_spawn_embed = AsyncMock()  # type: ignore[method-assign]
+
+        def _create_task(coro: object) -> MagicMock:
+            if hasattr(coro, "close"):
+                coro.close()  # type: ignore[union-attr]
+            return MagicMock()
+
+        with patch("cogs.boss.asyncio.create_task", side_effect=_create_task) as create_task:
+            spawned = await self.cog._try_auto_spawn_guild(self.guild)
+        self.assertFalse(spawned)
+        create_task.assert_called_once()
+        self.cog._send_boss_spawn_embed.assert_not_called()
+
+    async def test_auto_spawn_retries_soon_when_blocked(self) -> None:
+        now = time.time()
+        self.cog._schedule_auto_spawn_retry(self.guild_id, now=now)
+        due = self.cog._auto_spawn_due_at[self.guild_id]
+        self.assertAlmostEqual(due, now + config.BOSS_AUTO_SPAWN_RETRY_SECONDS, delta=1.0)
+        self.assertIn(self.guild_id, self.cog._spawn_warned)
+
+    async def test_auto_spawn_full_schedule_after_success(self) -> None:
+        now = time.time()
+        self.cog._spawn_warned.add(self.guild_id)
+        self.cog._schedule_next_auto_spawn(self.guild_id, now=now)
+        self.cog._spawn_warned.discard(self.guild_id)
+        due = self.cog._auto_spawn_due_at[self.guild_id]
+        self.assertAlmostEqual(due, now + config.BOSS_AUTO_SPAWN_MIN_SECONDS, delta=1.0)
+        self.assertNotIn(self.guild_id, self.cog._spawn_warned)
 
     async def test_despawns_expired_boss_before_skipping(self) -> None:
         past = time.time() - 3600
@@ -93,10 +130,15 @@ class BossAutoSpawnTests(unittest.IsolatedAsyncioTestCase):
             5000.0,
             spawned_at=past,
         )
-        self.cog._despawn_boss_timeout = AsyncMock()  # type: ignore[method-assign]
+
+        async def _despawn(guild: object) -> None:
+            await self.db.clear_boss(self.guild_id)
+
+        self.cog._despawn_boss_timeout = AsyncMock(side_effect=_despawn)  # type: ignore[method-assign]
         self.cog._send_boss_spawn_embed = AsyncMock()  # type: ignore[method-assign]
         with patch("cogs.boss.random.random", return_value=0.99):
-            await self.cog._try_auto_spawn_guild(self.guild)
+            spawned = await self.cog._try_auto_spawn_guild(self.guild)
+        self.assertTrue(spawned)
         self.cog._despawn_boss_timeout.assert_awaited_once()
         self.cog._send_boss_spawn_embed.assert_awaited()
 

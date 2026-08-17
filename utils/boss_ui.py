@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -498,11 +499,11 @@ async def send_boss_fight_panel(
         return
 
     if float(boss_row["hp"]) <= 0 and interaction.guild is not None:
-        await cog._complete_boss_defeat(
-            interaction.guild,
-            interaction=interaction,
-            killer_user_id=None,
+        await interaction.followup.send(
+            "The boss has collapsed — resolving payouts in the raid channel now.",
+            ephemeral=True,
         )
+        asyncio.create_task(cog._safe_finish_collapsed_boss(interaction.guild))
         return
 
     if cog.bot.db.boss_has_expired(boss_row) and interaction.guild is not None:
