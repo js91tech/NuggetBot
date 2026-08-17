@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 
 import config
@@ -13,6 +14,7 @@ class CompanionDefinition:
     effect: str
     emoji: str = "🐾"
     source: str = ""
+    rarity: str = "common"
 
 
 @dataclass
@@ -34,6 +36,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "scrap",
         "🧌",
         "Hannah's Henchmen",
+        "common",
     ),
     "hench_jester_imp": CompanionDefinition(
         "hench_jester_imp",
@@ -42,6 +45,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "crit",
         "😈",
         "Court of Kitty's Jesters",
+        "uncommon",
     ),
     "hench_vault_rat": CompanionDefinition(
         "hench_vault_rat",
@@ -50,6 +54,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "dungeon",
         "🐀",
         "Gilded Vault",
+        "rare",
     ),
     "hench_medic_slime": CompanionDefinition(
         "hench_medic_slime",
@@ -58,6 +63,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "boss",
         "🟢",
         "Boss raid",
+        "common",
     ),
     "hench_courier_bird": CompanionDefinition(
         "hench_courier_bird",
@@ -66,6 +72,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "work",
         "🐦",
         "Jobs",
+        "common",
     ),
     "hench_plunder_pup": CompanionDefinition(
         "hench_plunder_pup",
@@ -74,6 +81,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "plunder",
         "🐕",
         "Duels",
+        "rare",
     ),
     "hench_lab_moss": CompanionDefinition(
         "hench_lab_moss",
@@ -82,6 +90,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "income",
         "🌿",
         "Drug lab",
+        "uncommon",
     ),
     "hench_corp_drone": CompanionDefinition(
         "hench_corp_drone",
@@ -90,6 +99,7 @@ COMPANION_DEFINITIONS: dict[str, CompanionDefinition] = {
         "business",
         "🤖",
         "Business empire",
+        "epic",
     ),
 }
 
@@ -100,9 +110,71 @@ ADD_COMPANION_DROPS: dict[str, str] = {
 
 VAULT_COMPANION_DROP = "hench_vault_rat"
 
+COMPANION_ATTACK_VERBS: tuple[str, ...] = (
+    "nips",
+    "claws",
+    "pounces on",
+    "savages",
+    "chomps",
+    "lunges at",
+    "pecks",
+    "slimes",
+)
+
 
 def companion_by_id(companion_id: str) -> CompanionDefinition | None:
     return COMPANION_DEFINITIONS.get(companion_id)
+
+
+def companion_display_name(companion_id: str, custom_name: str | None) -> str:
+    if custom_name:
+        return custom_name.strip()
+    defn = companion_by_id(companion_id)
+    return defn.name if defn is not None else companion_id
+
+
+def companion_emoji(companion_id: str) -> str:
+    defn = companion_by_id(companion_id)
+    return defn.emoji if defn is not None else "🐾"
+
+
+def evolution_damage_mult(tier: int) -> float:
+    safe_tier = max(1, min(tier, config.COMPANION_MAX_EVOLUTION_TIER))
+    return 1.0 + (safe_tier - 1) * config.COMPANION_EVOLUTION_DAMAGE_BONUS
+
+
+def rarity_damage_mult(rarity: str) -> float:
+    return config.COMPANION_RARITY_DAMAGE_MULT.get(rarity, 1.0)
+
+
+def base_tier_damage(evolution_tier: int) -> int:
+    tier = max(1, evolution_tier)
+    return config.COMPANION_BASE_DAMAGE + (tier - 1) * config.COMPANION_TIER_DAMAGE_STEP
+
+
+def roll_companion_damage(
+    companion_id: str,
+    *,
+    evolution_tier: int,
+    owner_attack_power: int,
+) -> tuple[int, bool, str]:
+    """Fixed tier base + rarity scaling + 25% inherited owner attack power."""
+    defn = companion_by_id(companion_id)
+    rarity = defn.rarity if defn is not None else "common"
+    base = base_tier_damage(evolution_tier)
+    inherit = int(owner_attack_power * config.COMPANION_OWNER_STAT_INHERIT)
+    mult = rarity_damage_mult(rarity) * evolution_damage_mult(evolution_tier)
+    low = int((base + inherit) * mult * 0.85)
+    high = int((base + inherit) * mult * 1.15)
+    damage = random.randint(max(1, low), max(1, high))
+    crit_chance = 0.05
+    if defn is not None and defn.effect == "crit":
+        crit_chance += 0.04
+    critical = random.random() < crit_chance
+    if critical:
+        damage = int(damage * 1.5)
+    verb = random.choice(COMPANION_ATTACK_VERBS)
+    return max(1, damage), critical, verb
 
 
 def bonuses_from_companion(companion_id: str) -> CompanionBonuses:
